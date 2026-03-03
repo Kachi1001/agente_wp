@@ -60,6 +60,8 @@ Use o valor de `qrCode` em um gerador de QR ou escanei via terminal (a própria 
 | `npm run build` | Compila TypeScript para `./dist`       |
 | `npm run start` | Inicia a versão compilada (produção)   |
 
+> ⚠️ **Em produção**, sempre execute `npm run build` antes de `npm run start`. O `npm start` executa o JavaScript compilado da pasta `dist/`. Se essa pasta não existir, o servidor vai travar com `MODULE_NOT_FOUND`.
+
 ---
 
 ## Endpoints
