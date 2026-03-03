@@ -322,6 +322,13 @@ Authorization: Bearer <WEBHOOK_SECRET do .env>
 
 Seu Next.js **deve validar** esse header para rejeitar webhooks não autorizados.
 
+### Header de Cache
+Se o Next.js estiver offline e o Agente reenviar mensagens acumuladas posteriormente, ele enviará um header adicional:
+```
+X-Webhook-Cached: true
+```
+Isso permite que sua aplicação saiba que a mensagem não é em tempo real e pode ser ignorada por bots ou tratada como histórico.
+
 ---
 
 ## 6. Como Implementar o Webhook no Next.js
