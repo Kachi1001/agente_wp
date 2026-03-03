@@ -1,0 +1,29 @@
+# Dependências
+node_modules/
+npm-debug.log*
+
+# Build
+dist/
+
+# Variáveis de Ambiente — NUNCA commitar
+.env
+.env.local
+.env.*.local
+
+# Dados de autenticação do WhatsApp — NUNCA commitar (dados sensíveis de sessão)
+auth_keys/
+
+# Logs
+logs/
+*.log
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# TypeScript cache
+*.tsbuildinfo
