@@ -27,3 +27,5 @@ Thumbs.db
 
 # TypeScript cache
 *.tsbuildinfo
+
+.wwebjs_auth/

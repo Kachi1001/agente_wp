@@ -33,12 +33,16 @@ export class WebhookService {
       return;
     }
 
-    const payload = {
-      eventType: 'message.received',
-      session: sessionId,
-      timestamp: new Date().toISOString(),
-      data: messageData
-    };
+    // Se o messageData já é um envelope completo (ex: session.disconnected), usa direto;
+    // caso contrário, envelopa como 'message.received'
+    const payload = messageData.eventType
+      ? messageData
+      : {
+        eventType: 'message.received',
+        session: sessionId,
+        timestamp: new Date().toISOString(),
+        data: messageData
+      };
 
     try {
       const response = await webhookClient.post(url as string, payload, {
@@ -49,16 +53,16 @@ export class WebhookService {
         timeout: 10000 // 10s por tentativa
       });
 
-      logger.info(`[Webhook] Mensagem da sessão "${sessionId}" encaminhada para ${url}. Status: ${response.status}`);
+      logger.info(`[Webhook] Mensagem da sessao "${sessionId}" encaminhada para ${url}. Status: ${response.status}`);
 
       // Se enviou com sucesso, tenta esvaziar o cache de mensagens falhas anteriores
       this.processSessionCache(sessionId, url).catch(err =>
-        logger.error(`[Webhook Cache] Erro ao processar cache da sessão ${sessionId}: ${err.message}`)
+        logger.error(`[Webhook Cache] Erro ao processar cache da sessao ${sessionId}: ${err.message}`)
       );
 
     } catch (error: any) {
       // Chegou aqui após esgotar todas as tentativas de retry do Axios
-      logger.error(`[Webhook] FALHA DEFINITIVA após 5 tentativas: sessão "${sessionId}" → ${url}`);
+      logger.error(`[Webhook] FALHA DEFINITIVA após 5 tentativas: sessao "${sessionId}" → ${url}`);
 
       // Salva no cache para tentar depois
       this.addToCache(sessionId, payload);
@@ -93,7 +97,7 @@ export class WebhookService {
       cache.push(payload);
       fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2));
 
-      logger.warn(`[Webhook Cache] Mensagem salva no cache da sessão "${sessionId}". Total: ${cache.length}`);
+      logger.warn(`[Webhook Cache] Mensagem salva no cache da sessao "${sessionId}". Total: ${cache.length}`);
     } catch (err: any) {
       logger.error(`[Webhook Cache] Erro crítico ao salvar cache: ${err.message}`);
     }
@@ -138,10 +142,10 @@ export class WebhookService {
 
       if (remainingCache.length > 0) {
         fs.writeFileSync(cachePath, JSON.stringify(remainingCache, null, 2));
-        logger.warn(`[Webhook Cache] Restaram ${remainingCache.length} mensagens no cache da sessão "${sessionId}".`);
+        logger.warn(`[Webhook Cache] Restaram ${remainingCache.length} mensagens no cache da sessao "${sessionId}".`);
       } else {
         fs.unlinkSync(cachePath);
-        logger.info(`[Webhook Cache] Cache da sessão "${sessionId}" limpo com sucesso! (${successCount} mensagens enviadas)`);
+        logger.info(`[Webhook Cache] Cache da sessao "${sessionId}" limpo com sucesso! (${successCount} mensagens enviadas)`);
       }
     } catch (err: any) {
       logger.error(`[Webhook Cache] Erro ao processar arquivo de cache: ${err.message}`);
