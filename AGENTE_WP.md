@@ -33,7 +33,8 @@ agente_wp/
 │   │   └── messageRoutes.ts      # Rotas: /message/send
 │   └── services/
 │       ├── SessionManager.ts     # 🧠 CORAÇÃO do sistema. Cria e gerencia instâncias Client do wwebjs.
-│       └── WebhookService.ts     # Dispara HTTP POST ao Next.js. Tem retry e cache de falhas.
+│       ├── SocketService.ts      # Gerencia WebSockets para comunicação em tempo real bidirecional.
+│       └── NotifyService.ts      # Emite eventos via Socket.IO e faz POST HTTP (Webhook) fallback.
 ├── auth_keys/                    # ⚠️ NUNCA commitar. Gerado automaticamente.
 │   └── session-ti-suporte/       # Dados de autenticação da sessão (Puppeteer LocalAuth).
 │       └── session_config.json   # webhookUrl salvo em disco para esta sessão.
@@ -123,18 +124,18 @@ O `agente_wp` é um **microserviço Node.js** que age como uma camada intermedi�
    └──────────────────┘ └───────────────┘ └────────────────────┘
 ```
 
-### Fluxo de ENTRADA (WhatsApp → Next.js):
+### Fluxo de ENTRADA (WhatsApp → Front-end / Next.js):
 1. O celular conectado à sessão `ti-suporte` recebe uma mensagem.
-2. O `agente_wp` captura o evento via **whatsapp-web.js** (Puppeteer/Chromium).
-3. Monta um payload JSON padronizado com os dados da mensagem.
-4. Faz um `HTTP POST` para o `webhookUrl` cadastrado para a sessão `ti-suporte`.
-5. O Next.js recebe, processa (salva no banco, aciona bot, emite Socket.IO para o painel, etc.).
+2. O `agente_wp` captura o evento via **whatsapp-web.js**.
+3. Monta um payload JSON padronizado e **emite um evento Socket.IO** (`message.received`).
+4. (Fallback persistente) Faz um `HTTP POST` para o `webhookUrl` cadastrado para a sessão `ti-suporte`.
+5. Sua aplicação recebe via Socket (instantâneo) ou via Webhook, processa e atualiza a interface.
 
-### Fluxo de SAÍDA (Next.js → WhatsApp):
-1. A lógica do Next.js decide enviar uma resposta (bot ou atendente).
-2. O Next.js faz um `HTTP POST` para `http://agente_wp:3005/message/send`.
+### Fluxo de SAÍDA (Front-end / Next.js → WhatsApp):
+1. A lógica da sua aplicação decide enviar uma resposta (bot ou atendente).
+2. O Front-end **emite um evento Socket.IO** `send_message` para o `agente_wp` (ou usa `HTTP POST /message/send`).
 3. O `agente_wp` usa a sessão informada para disparar a mensagem/mídia via WhatsApp.
-4. Retorna `200 OK` com confirmação ou erro para o Next.js.
+4. Retorna a confirmação de sucesso/erro via callback do Socket (ou requisição HTTP).
 
 ---
 
@@ -362,9 +363,9 @@ curl http://localhost:3005/health
 
 ---
 
-## 5. Webhook: O que o Next.js vai receber
+## 5. Eventos: O que sua Aplicação vai receber
 
-Sempre que uma mensagem chegar em qualquer sessão, o `agente_wp` fará um `HTTP POST` para o `webhookUrl` cadastrado da sessão.
+Sempre que um evento ocorrer, o `agente_wp` vai **emitir um evento em tempo real via Socket.IO** e, logo em seguida, fará um `HTTP POST` (Webhook) para o `webhookUrl` cadastrado (se houver). A recomendação principal para interatividade é escutar os eventos via Socket.IO.
 
 ### Payload padrão (todas as mensagens)
 ```json
@@ -468,45 +469,49 @@ AGENTE_WP_SECRET=minha-chave-secreta-aqui
 
 ---
 
-## 7. Como Enviar Mensagens a Partir do Next.js
+## 7. Como Enviar Mensagens a Partir do seu Sistema
 
-Crie uma função helper de envio:
+A forma **principal e recomendada** é usando um cliente **Socket.IO**, perfeito para painéis de atendimento em tempo real.
 
-```typescript
-// src/lib/agente.ts
-import axios from 'axios';
+### Via Socket.IO (Recomendado - Latência Zero)
 
-const agente = axios.create({
-  baseURL: process.env.AGENTE_WP_URL,
-  timeout: 10000,
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:3005');
+
+// Exemplo: Enviar texto
+socket.emit('send_message', {
+  sessionId: 'ti-suporte',
+  to: '5511999999999',
+  text: 'Olá via Socket!'
+}, (response) => {
+  // Opcional: callback para saber se enviou com sucesso
+  console.log('Resultado do envio:', response.success ? 'Sucesso' : 'Erro', response);
 });
 
-const SESSION_ID = 'ti-suporte'; // Mude conforme o ID da sessão desta aplicação
+// Exemplo: Enviar mídia
+socket.emit('send_message', {
+  sessionId: 'ti-suporte',
+  to: '5511999999999',
+  text: 'Veja esse documento:',
+  mediaUrl: 'https://meusite.com/doc.pdf',
+  mediaType: 'document'
+});
+```
+
+### Via API REST (Fallback)
+
+Se estiver chamando a partir de um back-end crons ou jobs (e não quer abrir um Socket), a API REST `/message/send` continua funcionando perfeitamente (veja detalhes na Seção 4.2).
+
+```typescript
+import axios from 'axios';
 
 export async function sendWhatsAppMessage(to: string, text: string) {
-  return agente.post('/message/send', {
-    sessionId: SESSION_ID,
+  return axios.post('http://localhost:3005/message/send', {
+    sessionId: 'ti-suporte', // Mude conforme a sessão
     to,
     text,
-  });
-}
-
-export async function sendWhatsAppImage(to: string, imageUrl: string, caption = '') {
-  return agente.post('/message/send', {
-    sessionId: SESSION_ID,
-    to,
-    text: caption,
-    mediaUrl: imageUrl,
-    mediaType: 'image',
-  });
-}
-
-export async function sendWhatsAppAudio(to: string, audioUrl: string) {
-  return agente.post('/message/send', {
-    sessionId: SESSION_ID,
-    to,
-    mediaUrl: audioUrl,
-    mediaType: 'ptt', // Mensagem de voz
   });
 }
 ```
@@ -559,7 +564,8 @@ agente_wp/
 │   │   └── messageRoutes.ts      # Mapeamento de rotas /message/*
 │   └── services/
 │       ├── SessionManager.ts     # Gerencia instâncias do whatsapp-web.js (Client + LocalAuth)
-│       └── WebhookService.ts     # POST para Next.js com retry e cache de falhas
+│       ├── SocketService.ts      # WebSockets para comunicação bidirecional em tempo real
+│       └── NotifyService.ts      # Emite Sockets e POST HTTP para Next.js com retry e cache
 ├── auth_keys/                # ⚠️ Gerado automaticamente — NUNCA commitar
 │   └── session-ti-suporte/   # Dados do Puppeteer (LocalAuth) para a sessão
 │       └── session_config.json   # webhookUrl persistido desta sessão

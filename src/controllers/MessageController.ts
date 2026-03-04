@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { sessionManager } from '../services/SessionManager';
-import { logger } from '../index';
+import { logger } from '../utils/logger';
 
 export const messageController = {
   async send(req: Request, res: Response): Promise<void> {

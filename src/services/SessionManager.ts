@@ -1,7 +1,7 @@
 import { Client, LocalAuth, MessageMedia, Message as WWebMessage } from 'whatsapp-web.js';
 import * as fs from 'fs';
 import * as path from 'path';
-import { logger } from '../index';
+import { logger } from '../utils/logger';
 import qrcode from 'qrcode-terminal';
 
 export type SessionState = 'STARTING' | 'QR_READY' | 'CONNECTED' | 'DISCONNECTED';
@@ -162,15 +162,10 @@ class SessionManager {
       const session = this.sessions.get(sessionId);
       if (session) { session.status = 'CONNECTED'; session.qrCode = null; }
 
-      // Notifica o webhook que a sessão está online (útil após uma reconexão)
-      import('./WebhookService').then(({ WebhookService }) => {
+      // Notifica o status via NotifyService (Socket.IO + Webhook)
+      import('./NotifyService').then(({ NotifyService }) => {
         const sessionData = this.sessions.get(sessionId);
-        WebhookService.sendToWebhook(sessionId, {
-          eventType: 'session.connected',
-          session: sessionId,
-          timestamp: new Date().toISOString(),
-          data: { status: 'CONNECTED' }
-        }, sessionData?.webhookUrl);
+        NotifyService.notifyStatus(sessionId, 'session.connected', { status: 'CONNECTED' }, sessionData?.webhookUrl);
       });
     });
 
@@ -188,15 +183,10 @@ class SessionManager {
       const session = this.sessions.get(sessionId);
       if (session) session.status = 'DISCONNECTED';
 
-      // Notifica o webhook que o WhatsApp caiu
-      import('./WebhookService').then(({ WebhookService }) => {
+      // Notifica a queda via NotifyService
+      import('./NotifyService').then(({ NotifyService }) => {
         const sessionData = this.sessions.get(sessionId);
-        WebhookService.sendToWebhook(sessionId, {
-          eventType: 'session.disconnected',
-          session: sessionId,
-          timestamp: new Date().toISOString(),
-          data: { status: 'DISCONNECTED', reason }
-        }, sessionData?.webhookUrl);
+        NotifyService.notifyStatus(sessionId, 'session.disconnected', { status: 'DISCONNECTED', reason }, sessionData?.webhookUrl);
       });
 
       setTimeout(() => this.startSession(sessionId), 5000);
@@ -218,8 +208,7 @@ class SessionManager {
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
-      // Dispara o webhook IMEDIATAMENTE sem esperar o download da mídia
-      // Isso evita bloquear o event loop por até 6s (3 tentativas × 2s)
+      // Dispara o evento IMEDIATAMENTE via Socket.IO/Webhook
       const payload: any = {
         id: msg.id.id,
         fromMe: false,
@@ -236,18 +225,18 @@ class SessionManager {
         // raw: msg,
       };
 
-      import('./WebhookService').then(({ WebhookService }) => {
+      import('./NotifyService').then(({ NotifyService }) => {
         const sessionData = this.sessions.get(sessionId);
-        WebhookService.sendToWebhook(sessionId, payload, sessionData?.webhookUrl);
+        NotifyService.notifyMessage(sessionId, payload, sessionData?.webhookUrl);
       });
 
       // Download de mídia em background — não bloqueia a fila de mensagens
       if (msg.hasMedia) {
         saveMedia(msg).then(media => {
           if (!media) return;
-          import('./WebhookService').then(({ WebhookService }) => {
+          import('./NotifyService').then(({ NotifyService }) => {
             const sessionData = this.sessions.get(sessionId);
-            WebhookService.sendToWebhook(sessionId, {
+            NotifyService.notifyMessage(sessionId, {
               ...payload,
               eventType: 'media.ready',
               mediaUrl: media.url,
@@ -290,18 +279,18 @@ class SessionManager {
         // raw: msg,
       };
 
-      import('./WebhookService').then(({ WebhookService }) => {
+      import('./NotifyService').then(({ NotifyService }) => {
         const sessionData = this.sessions.get(sessionId);
-        WebhookService.sendToWebhook(sessionId, payload, sessionData?.webhookUrl);
+        NotifyService.notifyMessage(sessionId, payload, sessionData?.webhookUrl);
       });
 
       // Download de mídia em background
       if (msg.hasMedia) {
         saveMedia(msg).then(media => {
           if (!media) return;
-          import('./WebhookService').then(({ WebhookService }) => {
+          import('./NotifyService').then(({ NotifyService }) => {
             const sessionData = this.sessions.get(sessionId);
-            WebhookService.sendToWebhook(sessionId, {
+            NotifyService.notifyMessage(sessionId, {
               ...payload,
               eventType: 'media.ready',
               mediaUrl: media.url,
