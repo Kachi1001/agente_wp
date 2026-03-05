@@ -4,10 +4,11 @@ import { logger } from '../utils/logger';
 
 export const messageController = {
   async send(req: Request, res: Response): Promise<void> {
-    const { sessionId, to, text, isGroup } = req.body;
+    const { sessionId, to, text, mediaType } = req.body;
+    const file = req.file;
 
-    if (!sessionId || !to || !text) {
-      res.status(400).json({ error: 'Missing required parameters: sessionId, to, text' });
+    if (!sessionId || !to || (!text && !file)) {
+      res.status(400).json({ error: 'Missing required parameters: sessionId, to and (text or file)' });
       return;
     }
 
@@ -18,11 +19,13 @@ export const messageController = {
     }
 
     try {
-      // Internally gain access to the socket (in a real app, you might expose a send method in SessionManager instead)
-      // For simplicity in this architecture, we retrieve it from the manager's private map using a workaround
-      // or we add a specific `sendMessage` method to SessionManager. Let's assume we add it to SessionManager.
-
-      await sessionManager.sendMessage(sessionId, to, text, isGroup);
+      // Se houver arquivo no multipart/form-data, envia via Buffer (Memória)
+      if (file) {
+        await sessionManager.sendMessage(sessionId, to, text || '', mediaType, file.buffer, file.mimetype);
+      } else {
+        // Envio de texto simples
+        await sessionManager.sendMessage(sessionId, to, text);
+      }
 
       res.status(200).json({ success: true, message: 'Message sent successfully' });
     } catch (error: any) {

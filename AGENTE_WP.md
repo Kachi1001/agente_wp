@@ -478,7 +478,15 @@ A forma **principal e recomendada** é usando um cliente **Socket.IO**, perfeito
 ```javascript
 import { io } from 'socket.io-client';
 
-const socket = io('http://localhost:3005');
+// Passando o sessionId na query faz o servidor retornar o status imediatamente ao conectar
+const socket = io('http://localhost:3005', {
+  query: { sessionId: 'ti-suporte' }
+});
+
+// O agente emite 'current_status' automaticamente validando se a sessão existe e se está conectada
+socket.on('current_status', (status) => {
+  console.log('Status inicial da sessão:', status); // { exists: true, status: 'CONNECTED', qrCode: null }
+});
 
 // Exemplo: Enviar texto
 socket.emit('send_message', {

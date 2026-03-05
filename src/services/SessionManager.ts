@@ -2,6 +2,7 @@ import { Client, LocalAuth, MessageMedia, Message as WWebMessage } from 'whatsap
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../utils/logger';
+import { config } from '../config';
 import qrcode from 'qrcode-terminal';
 
 export type SessionState = 'STARTING' | 'QR_READY' | 'CONNECTED' | 'DISCONNECTED';
@@ -10,7 +11,6 @@ interface SessionData {
   client: Client;
   status: SessionState;
   qrCode: string | null;
-  webhookUrl: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -57,12 +57,11 @@ const MIME_MAP: Record<string, string> = {
 };
 
 /**
- * Baixa a mídia e salva em /public/media.
+ * Baixa a mídia e salva em /public/media/<sessionId>.
  * Tenta até 3 vezes antes de desistir.
- * Portado diretamente do whatsapp.ts original.
  * Retorna { url, type } se salvo com sucesso, ou null caso contrário.
  */
-export async function saveMedia(msg: WWebMessage): Promise<{ url: string; type: string } | null> {
+export async function saveMedia(sessionId: string, msg: WWebMessage): Promise<{ url: string; type: string } | null> {
   if (!msg.hasMedia) return null;
 
   try {
@@ -72,7 +71,7 @@ export async function saveMedia(msg: WWebMessage): Promise<{ url: string; type: 
         media = await msg.downloadMedia();
         if (media) break;
       } catch (err: any) {
-        logger.warn(`[Media] Tentativa ${i + 1} fallou para ${msg.id?.id}: ${err?.message}`);
+        logger.warn(`[Media] Tentativa ${i + 1} falhou para ${msg.id?.id}: ${err?.message}`);
       }
       await new Promise(r => setTimeout(r, 2000));
     }
@@ -82,20 +81,40 @@ export async function saveMedia(msg: WWebMessage): Promise<{ url: string; type: 
       return null;
     }
 
-    const ext = MIME_MAP[media.mimetype] || media.mimetype.split('/')[1]?.split(';')[0] || 'bin';
+    // Tenta detectar a extensão de forma mais inteligente
+    let ext = MIME_MAP[media.mimetype];
+    if (!ext) {
+      if (media.mimetype === 'application/octet-stream' || !media.mimetype.includes('/')) {
+        // Fallback baseado no tipo da mensagem original
+        if (msg.type === 'image') ext = 'jpg';
+        else if (msg.type === 'video') ext = 'mp4';
+        else if (msg.type === 'audio' || msg.type === 'ptt') ext = 'ogg';
+        else ext = 'bin';
+        logger.info(`[Media] MIME genérico (${media.mimetype}) detectado para tipo ${msg.type}. Usando ext: .${ext}`);
+      } else {
+        ext = media.mimetype.split('/')[1]?.split(';')[0] || 'bin';
+      }
+    }
+
     const safeId = msg.id.id.replace(/[^a-z0-9]/gi, '_');
     const filename = `${safeId}.${ext}`;
-    const mediaDir = path.join(process.cwd(), 'public', 'media');
+
+    // Organizar por sessão
+    const mediaDir = path.join(process.cwd(), 'public', 'media', sessionId);
     const filePath = path.join(mediaDir, filename);
 
     if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
 
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, media.data, { encoding: 'base64' });
-      logger.info(`[Media] Arquivo salvo: ${filename}`);
+      logger.info(`[Media] Arquivo salvo em ${sessionId}: ${filename}`);
     }
 
-    return { url: `/media/${filename}`, type: media.mimetype };
+    // Retorna URL completa
+    const relativeUrl = `/media/${sessionId}/${filename}`;
+    const absoluteUrl = `${config.baseUrl}${relativeUrl}`;
+
+    return { url: absoluteUrl, type: media.mimetype };
   } catch (e: any) {
     logger.error(`[Media] Erro ao processar mídia de ${msg.id?.id}: ${e?.message}`);
     return null;
@@ -119,24 +138,8 @@ class SessionManager {
   /**
    * Initializes a new WhatsApp-Web.js client for the given session ID
    */
-  async startSession(sessionId: string, webhookUrl?: string): Promise<void> {
-    logger.info(`Starting session: ${sessionId} → webhook: ${webhookUrl ?? '(from saved config)'}`);
-
-    const sessionPath = path.join(this.authFolder, sessionId);
-    const configPath = path.join(this.authFolder, sessionId, 'session_config.json');
-    let resolvedWebhookUrl = webhookUrl ?? '';
-
-    if (webhookUrl) {
-      if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
-      fs.writeFileSync(configPath, JSON.stringify({ webhookUrl }), 'utf-8');
-    } else if (fs.existsSync(configPath)) {
-      const saved = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      resolvedWebhookUrl = saved.webhookUrl ?? '';
-    }
-
-    if (!resolvedWebhookUrl) {
-      logger.warn(`Session ${sessionId} has no webhookUrl configured — messages will be dropped.`);
-    }
+  async startSession(sessionId: string): Promise<void> {
+    logger.info(`Starting session: ${sessionId}`);
 
     const client = new Client({
       authStrategy: new LocalAuth({ clientId: sessionId, dataPath: this.authFolder }),
@@ -146,7 +149,7 @@ class SessionManager {
       },
     });
 
-    this.sessions.set(sessionId, { client, status: 'STARTING', qrCode: null, webhookUrl: resolvedWebhookUrl });
+    this.sessions.set(sessionId, { client, status: 'STARTING', qrCode: null });
 
     // ── QR Code ──────────────────────────────────────────────────────────────
     client.on('qr', (qr) => {
@@ -162,10 +165,9 @@ class SessionManager {
       const session = this.sessions.get(sessionId);
       if (session) { session.status = 'CONNECTED'; session.qrCode = null; }
 
-      // Notifica o status via NotifyService (Socket.IO + Webhook)
+      // Notifica o status via NotifyService (Socket.IO)
       import('./NotifyService').then(({ NotifyService }) => {
-        const sessionData = this.sessions.get(sessionId);
-        NotifyService.notifyStatus(sessionId, 'session.connected', { status: 'CONNECTED' }, sessionData?.webhookUrl);
+        NotifyService.notifyStatus(sessionId, 'session.connected', { status: 'CONNECTED' });
       });
     });
 
@@ -185,8 +187,7 @@ class SessionManager {
 
       // Notifica a queda via NotifyService
       import('./NotifyService').then(({ NotifyService }) => {
-        const sessionData = this.sessions.get(sessionId);
-        NotifyService.notifyStatus(sessionId, 'session.disconnected', { status: 'DISCONNECTED', reason }, sessionData?.webhookUrl);
+        NotifyService.notifyStatus(sessionId, 'session.disconnected', { status: 'DISCONNECTED', reason });
       });
 
       setTimeout(() => this.startSession(sessionId), 5000);
@@ -208,7 +209,23 @@ class SessionManager {
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
-      // Dispara o evento IMEDIATAMENTE via Socket.IO/Webhook
+      let mediaUrl = null;
+      let mediaMime = null;
+
+      // Se tiver mídia, baixa AGORA antes de notificar via Socket
+      if (msg.hasMedia) {
+        const savedMedia = await saveMedia(sessionId, msg);
+        if (savedMedia) {
+          mediaUrl = savedMedia.url;
+          mediaMime = savedMedia.type;
+        } else {
+          // Fallback se falhar o download
+          mediaUrl = `${config.baseUrl}/media/error-media.png`;
+          mediaMime = 'image/png';
+        }
+      }
+
+      // Dispara o evento apenas APÓS o processamento da mídia
       const payload: any = {
         id: msg.id.id,
         fromMe: false,
@@ -220,31 +237,13 @@ class SessionManager {
         timestamp: msg.timestamp,
         mediaType: msg.type,
         hasMedia: msg.hasMedia,
-        mediaUrl: null,
-        mediaMime: null,
-        // raw: msg,
+        mediaUrl,
+        mediaMime,
       };
 
       import('./NotifyService').then(({ NotifyService }) => {
-        const sessionData = this.sessions.get(sessionId);
-        NotifyService.notifyMessage(sessionId, payload, sessionData?.webhookUrl);
+        NotifyService.notifyMessage(sessionId, payload);
       });
-
-      // Download de mídia em background — não bloqueia a fila de mensagens
-      if (msg.hasMedia) {
-        saveMedia(msg).then(media => {
-          if (!media) return;
-          import('./NotifyService').then(({ NotifyService }) => {
-            const sessionData = this.sessions.get(sessionId);
-            NotifyService.notifyMessage(sessionId, {
-              ...payload,
-              eventType: 'media.ready',
-              mediaUrl: media.url,
-              mediaMime: media.type,
-            }, sessionData?.webhookUrl);
-          });
-        }).catch(err => logger.error(`[${sessionId}] Erro background saveMedia: ${err.message}`));
-      }
     });
 
     // ── MENSAGENS ENVIADAS POR MIM ────────────────────────────────────────────
@@ -262,7 +261,23 @@ class SessionManager {
       logger.info(`[${sessionId}] Mensagem ENVIADA para ${msg.to} | tipo: ${msg.type}`);
 
       const previewText = getPreviewText(msg);
-      // Dispara o webhook imediatamente (sem aguardar mídia)
+
+      let mediaUrl = null;
+      let mediaMime = null;
+
+      // Se tiver mídia, baixa AGORA antes de notificar via Socket
+      if (msg.hasMedia) {
+        const savedMedia = await saveMedia(sessionId, msg);
+        if (savedMedia) {
+          mediaUrl = savedMedia.url;
+          mediaMime = savedMedia.type;
+        } else {
+          // Fallback se falhar
+          mediaUrl = `${config.baseUrl}/media/error-media.png`;
+          mediaMime = 'image/png';
+        }
+      }
+
       const payload: any = {
         id: msg.id.id,
         fromMe: true,
@@ -274,31 +289,13 @@ class SessionManager {
         timestamp: msg.timestamp,
         mediaType: msg.type,
         hasMedia: msg.hasMedia,
-        mediaUrl: null,
-        mediaMime: null,
-        // raw: msg,
+        mediaUrl,
+        mediaMime,
       };
 
       import('./NotifyService').then(({ NotifyService }) => {
-        const sessionData = this.sessions.get(sessionId);
-        NotifyService.notifyMessage(sessionId, payload, sessionData?.webhookUrl);
+        NotifyService.notifyMessage(sessionId, payload);
       });
-
-      // Download de mídia em background
-      if (msg.hasMedia) {
-        saveMedia(msg).then(media => {
-          if (!media) return;
-          import('./NotifyService').then(({ NotifyService }) => {
-            const sessionData = this.sessions.get(sessionId);
-            NotifyService.notifyMessage(sessionId, {
-              ...payload,
-              eventType: 'media.ready',
-              mediaUrl: media.url,
-              mediaMime: media.type,
-            }, sessionData?.webhookUrl);
-          });
-        }).catch(err => logger.error(`[${sessionId}] Erro background saveMedia (fromMe): ${err.message}`));
-      }
     });
 
     client.initialize().catch(err => {
@@ -321,9 +318,9 @@ class SessionManager {
     sessionId: string,
     to: string,
     text: string,
-    // isGroup: boolean = false,
-    mediaUrl?: string,
-    mediaType?: 'image' | 'audio' | 'video' | 'document' | 'ptt'
+    mediaType?: 'image' | 'audio' | 'video' | 'document' | 'ptt',
+    mediaBuffer?: Buffer,
+    mediaMime?: string
   ) {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
@@ -332,8 +329,9 @@ class SessionManager {
     let options: any = {};
     let content: any = text;
 
-    if (mediaUrl) {
-      const media = await MessageMedia.fromUrl(mediaUrl);
+    if (mediaBuffer && mediaMime) {
+      // Envio direto via Buffer (Memória) - Usado pelo Frontend
+      const media = new MessageMedia(mediaMime, mediaBuffer.toString('base64'), `file_${Date.now()}`);
       content = media;
       options.caption = text;
       if (mediaType === 'ptt') options.sendAudioAsVoice = true;

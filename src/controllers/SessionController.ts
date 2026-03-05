@@ -9,22 +9,11 @@ export const sessionController = {
       return;
     }
 
-    // webhookUrl tells the agent where to forward incoming messages for this session
-    const webhookUrl: string | undefined = req.body?.webhookUrl;
-
-    const status = sessionManager.getSessionStatus(id);
-
-    if (status.exists && status.status === 'CONNECTED') {
-      res.status(400).json({ error: 'Session already connected', status });
-      return;
-    }
-
     // Start connection process in background
-    sessionManager.startSession(id, webhookUrl).catch(console.error);
+    sessionManager.startSession(id).catch(console.error);
 
     res.status(202).json({
-      message: `Initializing session ${id}... Poll the /status endpoint to get the QR code.`,
-      webhookUrl: webhookUrl ?? '(not set — will use saved config if available)'
+      message: `Initializing session ${id}... Poll the /status endpoint to get the QR code.`
     });
   },
 
