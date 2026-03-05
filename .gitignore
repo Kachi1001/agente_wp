@@ -30,3 +30,5 @@ Thumbs.db
 
 .wwebjs_auth/*
 .wwebjs_cache/*
+
+public/media/*
