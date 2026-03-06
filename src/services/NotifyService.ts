@@ -18,7 +18,6 @@ export class NotifyService {
       data: messageData
     };
 
-    logger.info(`[Socket.IO] Emitting message.received for session "${sessionId}"`);
     socketService.emit('message.received', payload);
   }
 

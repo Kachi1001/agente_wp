@@ -102,12 +102,14 @@ class SocketService {
       const hasListeners = room && room.size > 0;
 
       if (hasListeners) {
+        logger.info(`[Socket.IO] Emitting ${event} for session "${sessionId}"`);
+
         this.io.to(sessionId).emit(event, payload);
         if (event !== 'events') {
           this.io.to(sessionId).emit('events', payload);
         }
       } else {
-        logger.info(`[Socket.IO] No active listeners for session "${sessionId}". Caching event "${event}".`);
+        // logger.info(`[Socket.IO] No active listeners for session "${sessionId}". Caching event "${event}".`);
         this.addToCache(sessionId, { event, payload, timestamp: new Date().toISOString() });
       }
     } else {
