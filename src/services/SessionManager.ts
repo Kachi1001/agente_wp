@@ -230,7 +230,6 @@ class SessionManager {
         id: msg.id.id,
         fromMe: false,
         jid: contact.id._serialized,
-        lid: msg.from,
         text: msg.body || '',
         pushName,
         previewText,
@@ -277,12 +276,10 @@ class SessionManager {
           mediaMime = 'image/png';
         }
       }
-
       const payload: any = {
         id: msg.id.id,
         fromMe: true,
-        jid: '',
-        lid: msg.to,
+        jid: msg.to,
         text: msg.body || '',
         pushName: null,
         previewText,
