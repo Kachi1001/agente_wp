@@ -200,14 +200,19 @@ class SessionManager {
       // Descarta msgs vazias sem mídia (ex: notificações de grupo)
       if (
         !(msg.from.includes('@c.us') || msg.from.includes('@lid')) ||
-        (msg.body === '' && !msg.hasMedia)
+        (msg.body === '' && !msg.hasMedia) ||
+        msg.fromMe
       ) return;
 
-      logger.info(`[${sessionId}] Mensagem recebida de ${msg.from} | tipo: ${msg.type}`);
-
       const contact = await msg.getContact();
+      console.log(contact.id._serialized,)
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
+
+      const lid = msg.from.includes('@lid') ? msg.from : null
+      const jid = contact.id._serialized.includes('@c.us') ? contact.id._serialized : null
+
+      logger.info(`[${sessionId}] Mensagem recebida de lid ${lid} jid ${jid} | tipo: ${msg.type}`);
 
       let mediaUrl = null;
       let mediaMime = null;
@@ -229,7 +234,8 @@ class SessionManager {
       const payload: any = {
         id: msg.id.id,
         fromMe: false,
-        jid: contact.id._serialized,
+        jid: jid,
+        lid: lid,
         text: msg.body || '',
         pushName,
         previewText,
@@ -257,8 +263,6 @@ class SessionManager {
         msg.from.includes('status@broadcast')
       ) return;
 
-      logger.info(`[${sessionId}] Mensagem ENVIADA para ${msg.to} | tipo: ${msg.type}`);
-
       const previewText = getPreviewText(msg);
 
       let mediaUrl = null;
@@ -276,10 +280,13 @@ class SessionManager {
           mediaMime = 'image/png';
         }
       }
+      const lid = msg.to.includes('@lid') ? msg.to : null
+      const jid = msg.to.includes('@c.us') ? msg.to : null
       const payload: any = {
         id: msg.id.id,
         fromMe: true,
-        jid: msg.to,
+        lid: lid,
+        jid: jid,
         text: msg.body || '',
         pushName: null,
         previewText,
@@ -290,6 +297,7 @@ class SessionManager {
         mediaMime,
       };
 
+      logger.info(`[${sessionId}] Mensagem ENVIADA para lid ${lid} jid ${jid} | tipo: ${msg.type}`);
       import('./NotifyService').then(({ NotifyService }) => {
         NotifyService.notifyMessage(sessionId, payload);
       });
