@@ -205,7 +205,6 @@ class SessionManager {
       ) return;
 
       const contact = await msg.getContact();
-      console.log(contact.id._serialized,)
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
