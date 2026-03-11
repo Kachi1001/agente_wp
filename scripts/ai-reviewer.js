@@ -6,7 +6,7 @@ const path = require('path');
 
 // ================= COLOQUE SEUS DADOS AQUI =================
 const BITRIX_WEBHOOK = process.env.BITRIX_WEBHOOK || ''; // URL de Automação do Bitrix
-const LOCAL_AI_URL = 'http://127.0.0.1:11434/api/chat'; // IP do seu Ollama ou LM Studio
+const LOCAL_AI_URL = 'http://10.0.0.34:11434/api/chat'; // IP do seu Ollama ou LM Studio
 const LOCAL_AI_MODEL = 'llama3.1:8b'; // Nome exato do modelo baixado
 // ==========================================================
 
@@ -70,8 +70,8 @@ async function analisarArquivosIndividualmente() {
             const diffDoArquivo = execSync(`git diff HEAD~1 HEAD -- "${arquivo}"`).toString();
 
             if (!diffDoArquivo.trim()) {
-                 console.log(`⚠️ Diff vazio para ${arquivo}, pulando...`);
-                 continue;
+                console.log(`⚠️ Diff vazio para ${arquivo}, pulando...`);
+                continue;
             }
 
             const prompt = `Você é um AI Reviewer especialista. Analise as seguintes mudanças feitas exclusivamente no arquivo "${arquivo}" e resuma o que foi feito de forma direta:\n\n${diffDoArquivo}`;
@@ -79,7 +79,7 @@ async function analisarArquivosIndividualmente() {
 
             console.log(`--- RESPOSTA DA IA PARA: ${arquivo} ---`);
             console.log(respostaIA);
-            
+
             changelogGlobal += `\n### 📄 Arquivo: \`${arquivo}\`\n${respostaIA}\n`;
             resumoParaBitrix += `\n**\nArquivo: ${arquivo}**\n${respostaIA}\n`;
         }
