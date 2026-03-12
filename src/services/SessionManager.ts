@@ -279,15 +279,18 @@ class SessionManager {
           mediaMime = 'image/png';
         }
       }
-      const lid = msg.to.includes('@lid') ? msg.to : null
-      const jid = msg.to.includes('@c.us') ? msg.to : null
+
+      const lid = msg.to
+      const contact = await client.getContactById(lid)
+      const jid = contact.id._serialized
+
       const payload: any = {
         id: msg.id.id,
         fromMe: true,
         lid: lid,
         jid: jid,
         text: msg.body || '',
-        pushName: null,
+        pushName: contact.pushname || contact.name || jid.split('@')[0],
         previewText,
         timestamp: msg.timestamp,
         mediaType: msg.type,
