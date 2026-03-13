@@ -20,14 +20,14 @@ export const messageController = {
 
     try {
       // Se houver arquivo no multipart/form-data, envia via Buffer (Memória)
+      let resp;
       if (file) {
-        await sessionManager.sendMessage(sessionId, to, text || '', mediaType, file.buffer, file.mimetype);
+        resp = await sessionManager.sendMessage(sessionId, to, text || '', mediaType, file.buffer, file.mimetype);
       } else {
         // Envio de texto simples
-        await sessionManager.sendMessage(sessionId, to, text);
+        resp = await sessionManager.sendMessage(sessionId, to, text);
       }
-
-      res.status(200).json({ success: true, message: 'Message sent successfully' });
+      res.status(200).json({ success: true, message: resp });
     } catch (error: any) {
       logger.error(error, `Failed to send message from session ${sessionId}`);
       res.status(500).json({ error: 'Failed to send message', details: error.message });
