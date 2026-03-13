@@ -1,18 +1,17 @@
-// scripts/ai-reviewer.js
 const { execSync } = require('child_process');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config();
 
 // ================= COLOQUE SEUS DADOS AQUI =================
 const BITRIX_WEBHOOK = process.env.BITRIX_WEBHOOK || ''; // URL de Automação do Bitrix
-const LOCAL_AI_URL = 'http://10.0.0.34:11434/api/chat'; // IP do seu Ollama ou LM Studio
-const LOCAL_AI_MODEL = 'llama3.1:8b'; // Nome exato do modelo baixado
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''; // Chave do OpenRouter no .env
+const OPENROUTER_MODEL = 'openrouter/free'; // Modelo gratuito do OpenRouter
 // ==========================================================
 
 const IA_OPTIONS = {
-    num_thread: 8,
-    num_gpu: 99,
     temperature: 0.1
 }
 
@@ -24,22 +23,32 @@ const IA_PROMPT = {
                 REGRA 4: Use Emojis! 🚀 Deixe a leitura mais visual e agradável, usando emojis como marcadores de lista ou para destacar pontos chave (ex: ✨ Feature, 🐛 Bugfix, 📝 Doc, ♻️ Refactor, 🔐 Security, ⚡ Performance, 🎨 UI/UX, 🛢️ Database, 🔗 Integration, 🧪 Testing, ✅ adição, ❌ remoção, ⚠️ alteração).`
 }
 
-async function enviarParaOllama(prompt) {
-    const response = await axios.post(LOCAL_AI_URL, {
-        model: LOCAL_AI_MODEL,
+async function enviarParaOpenRouter(prompt) {
+    if (!OPENROUTER_API_KEY) {
+        throw new Error("OPENROUTER_API_KEY não encontrada no .env");
+    }
+
+    const response = await axios.post(OPENROUTER_API_URL, {
+        model: OPENROUTER_MODEL,
         messages: [
             { role: "system", content: IA_PROMPT.system },
             { role: "user", content: prompt }
         ],
-        stream: false,
-        options: IA_OPTIONS
+        ...IA_OPTIONS
+    }, {
+        headers: {
+            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+            "HTTP-Referer": "https://github.com/Kachi1001/agente_wp", // Opcional, para o OpenRouter rankings
+            "Content-Type": "application/json"
+        }
     });
-    return response.data.message.content;
+
+    return response.data.choices[0].message.content;
 }
 
 async function analisarArquivosIndividualmente() {
     try {
-        console.log("🤖 Iniciando AI Reviewer Local...");
+        console.log("🤖 Iniciando AI Reviewer com OpenRouter...");
 
         // Pega apenas arquivos Adicionados (A) ou Modificados (M) no último commit
         const outputArquivos = execSync('git diff --name-only --diff-filter=AM HEAD~1 HEAD').toString().trim();
@@ -66,7 +75,7 @@ async function analisarArquivosIndividualmente() {
         let resumoParaBitrix = '';
 
         for (const arquivo of arquivosValidos) {
-            console.log(`\n⏳ Enviando o arquivo ${arquivo} para o Ollama analisar...`);
+            console.log(`\n⏳ Enviando o arquivo ${arquivo} para o OpenRouter analisar...`);
             const diffDoArquivo = execSync(`git diff HEAD~1 HEAD -- "${arquivo}"`).toString();
 
             if (!diffDoArquivo.trim()) {
@@ -75,7 +84,7 @@ async function analisarArquivosIndividualmente() {
             }
 
             const prompt = `Você é um AI Reviewer especialista. Analise as seguintes mudanças feitas exclusivamente no arquivo "${arquivo}" e resuma o que foi feito de forma direta:\n\n${diffDoArquivo}`;
-            const respostaIA = await enviarParaOllama(prompt);
+            const respostaIA = await enviarParaOpenRouter(prompt);
 
             console.log(`--- RESPOSTA DA IA PARA: ${arquivo} ---`);
             console.log(respostaIA);
