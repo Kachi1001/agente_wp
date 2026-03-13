@@ -32,5 +32,25 @@ export const messageController = {
       logger.error(error, `Failed to send message from session ${sessionId}`);
       res.status(500).json({ error: 'Failed to send message', details: error.message });
     }
+  },
+  async getHistory(req: Request, res: Response): Promise<void> {
+    const { sessionId, chatId, limit } = req.query;
+
+    if (!sessionId || !chatId) {
+      res.status(400).json({ error: 'Missing required query parameters: sessionId, chatId' });
+      return;
+    }
+
+    try {
+      const messages = await sessionManager.getMessages(
+        sessionId as string,
+        chatId as string,
+        limit ? parseInt(limit as string) : 50
+      );
+      res.status(200).json({ success: true, history: messages });
+    } catch (error: any) {
+      logger.error(error, `Failed to fetch history for session ${sessionId}, chat ${chatId}`);
+      res.status(500).json({ error: 'Failed to fetch messages', details: error.message });
+    }
   }
 };

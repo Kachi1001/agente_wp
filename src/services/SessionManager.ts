@@ -316,8 +316,7 @@ class SessionManager {
     return { exists: true, status: session.status, qrCode: session.qrCode };
   }
 
-  private formatJid(number: string, isGroup: boolean = false): string {
-    if (isGroup) return number.includes('@g.us') ? number : `${number}@g.us`;
+  private formatJid(number: string): string {
     return number.includes('@c.us') ? number : `${number}@c.us`;
   }
 
