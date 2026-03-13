@@ -5,6 +5,7 @@ import path from 'path';
 import { createServer } from 'http';
 import sessionRoutes from './routes/sessionRoutes';
 import messageRoutes from './routes/messageRoutes';
+import contactRoutes from './routes/contactRoutes';
 import { sessionManager } from './services/SessionManager';
 import { socketService } from './services/SocketService';
 import { logger } from './utils/logger';
@@ -24,6 +25,7 @@ app.use(express.json());
 // App Routes
 app.use('/session', sessionRoutes);
 app.use('/message', messageRoutes);
+app.use('/contact', contactRoutes);
 
 // Serve media files
 app.use('/media', express.static(path.join(process.cwd(), 'public', 'media')));

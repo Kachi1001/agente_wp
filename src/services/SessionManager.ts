@@ -356,6 +356,91 @@ class SessionManager {
     }
   }
 
+  async getMessages(sessionId: string, chatId: string, limit: number = 50) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = this.formatJid(chatId);
+    const chat = await session.client.getChatById(jid);
+    const messages = await chat.fetchMessages({ limit });
+
+    return await Promise.all(messages.map(async (msg) => {
+      let mediaUrl = null;
+      let mediaMime = null;
+
+      if (msg.hasMedia) {
+        const savedMedia = await saveMedia(sessionId, msg);
+        if (savedMedia) {
+          mediaUrl = savedMedia.url;
+          mediaMime = savedMedia.type;
+        } else {
+          mediaUrl = `${config.baseUrl}/media/error-media.png`;
+          mediaMime = 'image/png';
+        }
+      }
+
+      // Resolve contact for LID/Jid mapping
+      const contact = await msg.getContact();
+
+      return {
+        id: msg.id.id,
+        fromMe: msg.fromMe,
+        from: msg.from,
+        to: msg.to,
+        text: msg.body || '',
+        pushName: contact.pushname || contact.name || '',
+        previewText: getPreviewText(msg),
+        timestamp: msg.timestamp,
+        mediaType: msg.type,
+        hasMedia: msg.hasMedia,
+        mediaUrl,
+        mediaMime,
+      };
+    }));
+  }
+
+  async getContacts(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const rawContacts = await session.client.getContacts();
+
+    // Filtra e formata os contatos, resolvendo LID para JID se necessário
+    const formattedContacts = await Promise.all(rawContacts.map(async (contact) => {
+      let jid = contact.id._serialized;
+
+      if (jid.includes('@g.us') || jid.includes('@newsletter')) {
+        return null;
+      }
+      // Se for @lid, tentamos obter o @c.us (JID)
+      if (jid.includes('@lid')) {
+        try {
+          const resolvedContact = await session.client.getContactById(jid);
+          if (resolvedContact && resolvedContact.id._serialized.includes('@c.us')) {
+            jid = resolvedContact.id._serialized;
+          }
+        } catch (err) {
+          logger.warn(`[${sessionId}] Falha ao resolver LID ${jid}: ${err}`);
+        }
+      }
+
+      return {
+        jid,
+        name: contact.name || '',
+        pushname: contact.pushname || ''
+      };
+    }));
+
+    // Remove duplicatas caso a resolução de LID tenha resultado em um JID que já existe na lista
+    const uniqueContacts = Array.from(new Map(
+      formattedContacts
+        .filter((c): c is { jid: string; name: string; pushname: string } => c !== null)
+        .map(c => [c.jid, c])
+    ).values());
+
+    return uniqueContacts;
+  }
+
   async deleteSession(sessionId: string) {
     const session = this.sessions.get(sessionId);
     if (session) {
