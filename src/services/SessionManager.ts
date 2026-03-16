@@ -55,7 +55,6 @@ const MIME_MAP: Record<string, string> = {
   'application/x-zip-compressed': 'zip',
   'text/plain': 'txt',
 };
-
 /**
  * Baixa a mídia e salva em /public/media/<sessionId>.
  * Tenta até 3 vezes antes de desistir.
@@ -171,28 +170,35 @@ class SessionManager {
       });
     });
 
-    client.on('authenticated', () => logger.info(`[${sessionId}] Autenticado.`));
+    // ── Autenticado ─────────────────────────────────────────────────────────
+    client.on('authenticated', () => {
+      logger.info(`[${sessionId}] Autenticado.`);
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        session.status = 'CONNECTED'; // Pode ser refinado se necessário
+      }
+    });
 
     client.on('auth_failure', (msg) => {
       logger.error(`[${sessionId}] AUTH FAILURE: ${msg}`);
-      const session = this.sessions.get(sessionId);
-      if (session) session.status = 'DISCONNECTED';
+      this.handleDisconnection(sessionId, `auth_failure: ${msg}`);
     });
 
     // ── Desconectado ─────────────────────────────────────────────────────────
     client.on('disconnected', (reason) => {
       logger.warn(`[${sessionId}] Desconectado: ${reason}. Reconectando em 5s...`);
-      const session = this.sessions.get(sessionId);
-      if (session) session.status = 'DISCONNECTED';
-
-      // Notifica a queda via NotifyService
-      import('./NotifyService').then(({ NotifyService }) => {
-        NotifyService.notifyStatus(sessionId, 'session.disconnected', { status: 'DISCONNECTED', reason });
-      });
-
+      this.handleDisconnection(sessionId, reason);
       setTimeout(() => this.startSession(sessionId), 5000);
     });
 
+    // ── Mudança de Estado ───────────────────────────────────────────────────
+    client.on('change_state', (state) => {
+      logger.info(`[${sessionId}] Estado alterado para: ${state}`);
+      if (state === 'CONFLICT' || state === 'UNPAIRED' || state === 'UNLAUNCHED') {
+        this.handleDisconnection(sessionId, `state_change: ${state}`);
+      }
+    });
+    
     // ── MENSAGENS RECEBIDAS (de outras pessoas) ───────────────────────────────
     // Espelha exatamente a lógica do client.on('message', ...) do whatsapp.ts
     client.on('message', async (msg: WWebMessage) => {
@@ -229,6 +235,19 @@ class SessionManager {
         }
       }
 
+      // Extrai mensagem respondida (quoted) se houver
+      let quotedMsg: any = null;
+      if (msg.hasQuotedMsg) {
+        try {
+          const quoted = await msg.getQuotedMessage();
+          if (quoted) {
+            quotedMsg = quoted.id.id
+          }
+        } catch (err) {
+          logger.warn(`[${sessionId}] Falha ao obter quoted message: ${err}`);
+        }
+      }
+      
       // Dispara o evento apenas APÓS o processamento da mídia
       const payload: any = {
         id: msg.id.id,
@@ -243,6 +262,10 @@ class SessionManager {
         hasMedia: msg.hasMedia,
         mediaUrl,
         mediaMime,
+        vCards: (msg.type === 'vcard' || msg.type === 'multi_vcard') ? msg.vCards : [],
+        quotedMsg,
+        isForwarded: msg.isForwarded,
+        forwardingScore: msg.forwardingScore,
       };
 
       import('./NotifyService').then(({ NotifyService }) => {
@@ -280,6 +303,19 @@ class SessionManager {
         }
       }
 
+      // Extrai mensagem respondida (quoted) se houver
+      let quotedMsg: any = null;
+      if (msg.hasQuotedMsg) {
+        try {
+          const quoted = await msg.getQuotedMessage();
+          if (quoted) {
+            quotedMsg = quoted.id.id
+          }
+        } catch (err) {
+          logger.warn(`[${sessionId}] Falha ao obter quoted message: ${err}`);
+        }
+      }
+
       const lid = msg.to
       const contact = await client.getContactById(lid)
       const jid = contact.id._serialized
@@ -297,6 +333,10 @@ class SessionManager {
         hasMedia: msg.hasMedia,
         mediaUrl,
         mediaMime,
+        vCards: (msg.type === 'vcard' || msg.type === 'multi_vcard') ? msg.vCards : [],
+        quotedMsg,
+        isForwarded: msg.isForwarded,
+        forwardingScore: msg.forwardingScore,
       };
 
       logger.info(`[${sessionId}] Mensagem ENVIADA para lid ${lid} jid ${jid} | tipo: ${msg.type}`);
@@ -381,6 +421,19 @@ class SessionManager {
       // Resolve contact for LID/Jid mapping
       const contact = await msg.getContact();
 
+      // Extrai mensagem respondida (quoted) se houver
+      let quotedMsg: any = null;
+      if (msg.hasQuotedMsg) {
+        try {
+          const quoted = await msg.getQuotedMessage();
+          if (quoted) {
+            quotedMsg = quoted.id.id
+          }
+        } catch (err) {
+          logger.warn(`[${sessionId}] Falha ao obter quoted message: ${err}`);
+        }
+      }
+
       return {
         id: msg.id.id,
         fromMe: msg.fromMe,
@@ -394,6 +447,10 @@ class SessionManager {
         hasMedia: msg.hasMedia,
         mediaUrl,
         mediaMime,
+        vCards: (msg.type === 'vcard' || msg.type === 'multi_vcard') ? msg.vCards : [],
+        quotedMsg,
+        isForwarded: msg.isForwarded,
+        forwardingScore: msg.forwardingScore,
       };
     }));
   }
@@ -477,6 +534,25 @@ class SessionManager {
       await this.startSession(sessionId);
       await new Promise(r => setTimeout(r, 2000));
     }
+  }
+
+  /**
+   * Centraliza o tratamento de desconexão e notificação via Socket
+   */
+  private handleDisconnection(sessionId: string, reason: string) {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.status = 'DISCONNECTED';
+    }
+
+    // Notifica a queda via NotifyService para que o front possa bloquear a tela
+    import('./NotifyService').then(({ NotifyService }) => {
+      NotifyService.notifyStatus(sessionId, 'session.disconnected', {
+        status: 'DISCONNECTED',
+        reason,
+        message: 'WhatsApp desconectado ou inacessível'
+      });
+    });
   }
 }
 
