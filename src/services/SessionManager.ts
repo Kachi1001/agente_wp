@@ -451,7 +451,6 @@ class SessionManager {
 
     const jid = this.formatJid(to);
     let options: any = {};
-    if (quotedMessageId) options.quotedMessageId = quotedMessageId;
     let content: any = text;
 
     if (mediaBuffer && mediaMime) {
@@ -460,6 +459,18 @@ class SessionManager {
       content = media;
       options.caption = text;
       if (mediaType === 'ptt') options.sendAudioAsVoice = true;
+    }
+
+    // Se for uma resposta a outra mensagem, usa msg.reply() para garantir o quote
+    if (quotedMessageId) {
+      try {
+        const quotedMsg = await session.client.getMessageById(quotedMessageId);
+        if (quotedMsg) {
+          return await quotedMsg.reply(content, jid, options);
+        }
+      } catch (err: any) {
+        logger.warn(`[${sessionId}] Falha ao buscar mensagem citada ${quotedMessageId}: ${err.message}. Enviando sem quote.`);
+      }
     }
 
     // Tenta com JID formatado; se der "No LID for user", tenta o numero puro
