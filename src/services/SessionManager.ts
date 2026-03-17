@@ -273,7 +273,7 @@ class SessionManager {
         try {
           const quoted = await msg.getQuotedMessage();
           if (quoted) {
-            quotedMsg = quoted.id.id
+            quotedMsg = quoted.id._serialized
           }
         } catch (err) {
           logger.warn(`[${sessionId}] Falha ao obter quoted message: ${err}`);
@@ -343,7 +343,7 @@ class SessionManager {
         try {
           const quoted = await msg.getQuotedMessage();
           if (quoted) {
-            quotedMsg = quoted.id.id
+            quotedMsg = quoted.id._serialized
           }
         } catch (err) {
           logger.warn(`[${sessionId}] Falha ao obter quoted message: ${err}`);
@@ -544,7 +544,7 @@ class SessionManager {
         try {
           const quoted = await msg.getQuotedMessage();
           if (quoted) {
-            quotedMsg = quoted.id.id
+            quotedMsg = quoted.id._serialized
           }
         } catch (err) {
           logger.warn(`[${sessionId}] Falha ao obter quoted message: ${err}`);
