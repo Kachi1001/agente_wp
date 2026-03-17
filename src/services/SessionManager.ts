@@ -198,7 +198,7 @@ class SessionManager {
         this.handleDisconnection(sessionId, `state_change: ${state}`);
       }
     });
-    
+
     // ── MENSAGENS RECEBIDAS (de outras pessoas) ───────────────────────────────
     // Espelha exatamente a lógica do client.on('message', ...) do whatsapp.ts
     client.on('message', async (msg: WWebMessage) => {
@@ -211,6 +211,7 @@ class SessionManager {
       ) return;
 
       const contact = await msg.getContact();
+      const profilePicUrl = await contact.getProfilePicUrl().catch(() => null);
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
@@ -247,7 +248,7 @@ class SessionManager {
           logger.warn(`[${sessionId}] Falha ao obter quoted message: ${err}`);
         }
       }
-      
+
       // Dispara o evento apenas APÓS o processamento da mídia
       const payload: any = {
         id: msg.id.id,
@@ -266,6 +267,7 @@ class SessionManager {
         quotedMsg,
         isForwarded: msg.isForwarded,
         forwardingScore: msg.forwardingScore,
+        profilePicUrl,
       };
 
       import('./NotifyService').then(({ NotifyService }) => {
@@ -318,6 +320,7 @@ class SessionManager {
 
       const lid = msg.to
       const contact = await client.getContactById(lid)
+      const profilePicUrl = await contact.getProfilePicUrl().catch(() => null);
       const jid = contact.id._serialized
 
       const payload: any = {
@@ -337,6 +340,7 @@ class SessionManager {
         quotedMsg,
         isForwarded: msg.isForwarded,
         forwardingScore: msg.forwardingScore,
+        profilePicUrl,
       };
 
       logger.info(`[${sessionId}] Mensagem ENVIADA para lid ${lid} jid ${jid} | tipo: ${msg.type}`);
@@ -402,6 +406,7 @@ class SessionManager {
     const jid = this.formatJid(chatId);
     const chat = await session.client.getChatById(jid);
     const messages = await chat.fetchMessages({ limit });
+
 
     return await Promise.all(messages.map(async (msg) => {
       let mediaUrl = null;
