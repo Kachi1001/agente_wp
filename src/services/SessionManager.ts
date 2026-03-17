@@ -283,6 +283,7 @@ class SessionManager {
       // Dispara o evento apenas APÓS o processamento da mídia
       const payload: any = {
         id: msg.id.id,
+        serializedId: msg.id._serialized,
         fromMe: false,
         jid: jid,
         lid: lid,
@@ -356,6 +357,7 @@ class SessionManager {
 
       const payload: any = {
         id: msg.id.id,
+        serializedId: msg.id._serialized,
         fromMe: true,
         lid: lid,
         jid: jid,
@@ -466,7 +468,15 @@ class SessionManager {
       try {
         const quotedMsg = await session.client.getMessageById(quotedMessageId);
         if (quotedMsg) {
-          return await quotedMsg.reply(content, jid, options);
+          const resp = await quotedMsg.reply(content, jid, options);
+          return {
+            id: resp.id.id,
+            serializedId: resp.id._serialized,
+            fromMe: resp.fromMe,
+            to: resp.to,
+            text: resp.body,
+            timestamp: resp.timestamp
+          };
         }
       } catch (err: any) {
         logger.warn(`[${sessionId}] Falha ao buscar mensagem citada ${quotedMessageId}: ${err.message}. Enviando sem quote.`);
@@ -475,11 +485,27 @@ class SessionManager {
 
     // Tenta com JID formatado; se der "No LID for user", tenta o numero puro
     try {
-      return await session.client.sendMessage(jid, content, options);
+      const resp = await session.client.sendMessage(jid, content, options);
+      return {
+        id: resp.id.id,
+        serializedId: resp.id._serialized,
+        fromMe: resp.fromMe,
+        to: resp.to,
+        text: resp.body,
+        timestamp: resp.timestamp
+      };
     } catch (err: any) {
       if (err.message?.includes('No LID for user')) {
         logger.warn(`[${sessionId}] No LID para ${jid}, tentando numero direto: ${to}@c.us`);
-        return await session.client.sendMessage(`${to.replace(/@.*/, '')}@c.us`, content, options);
+        const resp = await session.client.sendMessage(`${to.replace(/@.*/, '')}@c.us`, content, options);
+        return {
+          id: resp.id.id,
+          serializedId: resp.id._serialized,
+          fromMe: resp.fromMe,
+          to: resp.to,
+          text: resp.body,
+          timestamp: resp.timestamp
+        };
       }
       throw err;
     }
@@ -527,6 +553,7 @@ class SessionManager {
 
       return {
         id: msg.id.id,
+        serializedId: msg.id._serialized,
         fromMe: msg.fromMe,
         from: msg.from,
         to: msg.to,
@@ -555,7 +582,7 @@ class SessionManager {
     const chat = await session.client.getChatById(jid);
     const messages = await chat.fetchMessages({ limit: 100 });
     const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
-    
+
     if (!msg) throw new Error('Message not found');
     return await msg.edit(newText);
   }

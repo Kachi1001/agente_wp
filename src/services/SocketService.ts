@@ -44,7 +44,7 @@ class SocketService {
 
           const result = await sessionManager.sendMessage(sessionId, to, text, mediaType);
 
-          if (callback) callback({ success: true, messageId: result.id.id });
+          if (callback) callback({ success: true, messageId: result.id, serializedId: result.serializedId });
         } catch (err: any) {
           logger.error(`[Socket.IO] Error sending message: ${err.message}`);
           if (callback) callback({ success: false, error: err.message });
