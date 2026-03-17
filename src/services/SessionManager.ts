@@ -123,23 +123,29 @@ export async function saveMedia(sessionId: string, msg: WWebMessage): Promise<{ 
 async function fetchProfilePic(client: Client, contact: any): Promise<string | null> {
   const jid = contact?.id?._serialized || contact;
   if (!jid || typeof jid !== 'string') return null;
-  console.log(contact)
-  try {
-    // Tenta primeiro via client, que costuma ser mais estável e evita erros internos do objeto contact
-    const url = await client.getProfilePicUrl(jid);
-    if (url) return url;
-  } catch (err: any) {
-    // Silencioso aqui, tenta fallback
+
+  // Mock de propriedades que podem estar faltando e causando crash na lib
+  if (contact && typeof contact === 'object') {
+    if (contact.isNewsletter === undefined) contact.isNewsletter = false;
+    if (contact.isGroup === undefined) contact.isGroup = false;
   }
 
   try {
-    // Fallback para o método do contato se o primeiro falhar
+    // Tenta primeiro via client, que costuma ser mais estável
+    const url = await client.getProfilePicUrl(jid);
+    if (url) return url;
+  } catch (err: any) {
+    // Silencioso
+  }
+
+  try {
+    // Fallback para o método do contato
     if (contact && typeof contact.getProfilePicUrl === 'function') {
-      const url = await contact.getProfilePicUrl();
-      return url || null;
+      return await contact.getProfilePicUrl();
     }
   } catch (err: any) {
-    logger.warn(`[ProfilePic] Fallback failed for ${jid}: ${err?.message}`);
+    // Se ainda falhar, loga apenas em debug para não poluir
+    logger.debug(`[ProfilePic] getProfilePicUrl failed for ${jid}: ${err?.message}`);
   }
 
   return null;
