@@ -121,9 +121,9 @@ export async function saveMedia(sessionId: string, msg: WWebMessage): Promise<{ 
 }
 
 async function fetchProfilePic(client: Client, contact: any): Promise<string | null> {
-  const jid = contact?.id?._serialized || contact; 
+  const jid = contact?.id?._serialized || contact;
   if (!jid || typeof jid !== 'string') return null;
-
+  console.log(jid)
   try {
     // Tenta primeiro via client, que costuma ser mais estável e evita erros internos do objeto contact
     const url = await client.getProfilePicUrl(jid);
@@ -131,7 +131,7 @@ async function fetchProfilePic(client: Client, contact: any): Promise<string | n
   } catch (err: any) {
     // Silencioso aqui, tenta fallback
   }
-  
+
   try {
     // Fallback para o método do contato se o primeiro falhar
     if (contact && typeof contact.getProfilePicUrl === 'function') {
