@@ -120,6 +120,23 @@ export async function saveMedia(sessionId: string, msg: WWebMessage): Promise<{ 
   }
 }
 
+async function fetchProfilePic(client: Client, contact: any): Promise<string | null> {
+  try {
+    const url = await contact.getProfilePicUrl();
+    if (url) return url;
+  } catch (err: any) {
+    logger.warn(`[ProfilePic] getProfilePicUrl failed for ${contact.id?._serialized}: ${err?.message}`);
+  }
+  
+  try {
+    const url = await client.getProfilePicUrl(contact.id._serialized);
+    return url || null;
+  } catch (err: any) {
+    logger.warn(`[ProfilePic] client.getProfilePicUrl failed for ${contact.id?._serialized}: ${err?.message}`);
+    return null;
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // SessionManager
 // ──────────────────────────────────────────────────────────────────────────────
@@ -211,7 +228,7 @@ class SessionManager {
       ) return;
 
       const contact = await msg.getContact();
-      const profilePicUrl = await contact.getProfilePicUrl().catch(() => null);
+      const profilePicUrl = await fetchProfilePic(client, contact);
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
@@ -320,7 +337,7 @@ class SessionManager {
 
       const lid = msg.to
       const contact = await client.getContactById(lid)
-      const profilePicUrl = await contact.getProfilePicUrl().catch(() => null);
+      const profilePicUrl = await fetchProfilePic(client, contact);
       const jid = contact.id._serialized
 
       const payload: any = {
@@ -456,6 +473,7 @@ class SessionManager {
         quotedMsg,
         isForwarded: msg.isForwarded,
         forwardingScore: msg.forwardingScore,
+        profilePicUrl: await fetchProfilePic(session.client, contact),
       };
     }));
   }
