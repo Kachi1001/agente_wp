@@ -51,6 +51,62 @@ export class NotifyService {
   }
 
   /**
+   * Status notification for message editing.
+   */
+  static async notifyMessageEdit(sessionId: string, data: any) {
+    const payload = {
+      eventType: 'message.edit',
+      session: sessionId,
+      timestamp: new Date().toISOString(),
+      data
+    };
+    logger.info(`[NotifyService] Notificando edição de mensagem na sessão ${sessionId}`);
+    socketService.emit('message.edit', payload);
+  }
+
+  /**
+   * Status notification for message deletion (revoke).
+   */
+  static async notifyMessageDelete(sessionId: string, data: any) {
+    const payload = {
+      eventType: 'message.delete',
+      session: sessionId,
+      timestamp: new Date().toISOString(),
+      data
+    };
+    logger.info(`[NotifyService] Notificando exclusão de mensagem na sessão ${sessionId}`);
+    socketService.emit('message.delete', payload);
+  }
+
+  /**
+   * Status notification for message reaction.
+   */
+  static async notifyMessageReaction(sessionId: string, data: any) {
+    const payload = {
+      eventType: 'message.reaction',
+      session: sessionId,
+      timestamp: new Date().toISOString(),
+      data
+    };
+    logger.info(`[NotifyService] Notificando reação de mensagem na sessão ${sessionId}`);
+    socketService.emit('message.reaction', payload);
+  }
+
+  /**
+   * Status notification for message ACK (send/delivered/read).
+   */
+  static async notifyMessageAck(sessionId: string, data: any) {
+    const payload = {
+      eventType: 'message.ack',
+      session: sessionId,
+      timestamp: new Date().toISOString(),
+      data
+    };
+    logger.info(`[NotifyService] Notificando ACK de mensagem na sessão ${sessionId} | ACK: ${data.ack}`);
+    socketService.emit('message.ack', payload);
+  }
+
+  /**
    * Primary method for status events (connected, disconnected).
    */
   static async notifyStatus(

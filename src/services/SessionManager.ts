@@ -380,6 +380,48 @@ class SessionManager {
       });
     });
 
+    client.on('message_edit', async (msg, newBody, prevBody) => {
+      logger.info(`[${sessionId}] Mensagem EDITADA (${msg.id.id}): ${prevBody} -> ${newBody}`);
+      import('./NotifyService').then(({ NotifyService }) => {
+        NotifyService.notifyMessageEdit(sessionId, {
+          id: msg.id.id,
+          newText: newBody,
+          timestamp: msg.timestamp
+        });
+      });
+    });
+
+    client.on('message_revoke_everyone', async (msg, revokedMsg) => {
+      const id = revokedMsg ? revokedMsg.id.id : msg.id.id;
+      logger.info(`[${sessionId}] Mensagem EXCLUÍDA (${id})`);
+      import('./NotifyService').then(({ NotifyService }) => {
+        NotifyService.notifyMessageDelete(sessionId, { id });
+      });
+    });
+
+    client.on('message_reaction', async (reaction) => {
+      logger.info(`[${sessionId}] REAÇÃO recebida na mensagem ${reaction.msgId}: ${reaction.reaction}`);
+      import('./NotifyService').then(({ NotifyService }) => {
+        NotifyService.notifyMessageReaction(sessionId, {
+          id: reaction.msgId,
+          reaction: {
+            text: reaction.reaction,
+            senderId: reaction.senderId
+          }
+        });
+      });
+    });
+
+    client.on('message_ack', async (msg, ack) => {
+      logger.info(`[${sessionId}] ACK recebido na mensagem ${msg.id.id} | valor: ${ack}`);
+      import('./NotifyService').then(({ NotifyService }) => {
+        NotifyService.notifyMessageAck(sessionId, {
+          id: msg.id.id,
+          ack
+        });
+      });
+    });
+
     client.initialize().catch(err => {
       logger.error(`[${sessionId}] Falha ao inicializar: ${err.message}`);
     });
@@ -401,13 +443,15 @@ class SessionManager {
     text: string,
     mediaType?: 'image' | 'audio' | 'video' | 'document' | 'ptt',
     mediaBuffer?: Buffer,
-    mediaMime?: string
+    mediaMime?: string,
+    quotedMessageId?: string
   ) {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
 
     const jid = this.formatJid(to);
     let options: any = {};
+    if (quotedMessageId) options.quotedMessageId = quotedMessageId;
     let content: any = text;
 
     if (mediaBuffer && mediaMime) {
@@ -490,6 +534,45 @@ class SessionManager {
         profilePicUrl: await fetchProfilePic(session.client, contact),
       };
     }));
+  }
+
+  async editMessage(sessionId: string, number: string, messageId: string, newText: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = this.formatJid(number);
+    const chat = await session.client.getChatById(jid);
+    const messages = await chat.fetchMessages({ limit: 100 });
+    const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
+    
+    if (!msg) throw new Error('Message not found');
+    return await msg.edit(newText);
+  }
+
+  async deleteMessage(sessionId: string, number: string, messageId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = this.formatJid(number);
+    const chat = await session.client.getChatById(jid);
+    const messages = await chat.fetchMessages({ limit: 100 });
+    const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
+
+    if (!msg) throw new Error('Message not found');
+    return await msg.delete(true);
+  }
+
+  async reactToMessage(sessionId: string, number: string, messageId: string, emoji: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = this.formatJid(number);
+    const chat = await session.client.getChatById(jid);
+    const messages = await chat.fetchMessages({ limit: 100 });
+    const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
+
+    if (!msg) throw new Error('Message not found');
+    return await msg.react(emoji);
   }
 
   async getContacts(sessionId: string) {
