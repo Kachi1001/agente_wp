@@ -121,20 +121,28 @@ export async function saveMedia(sessionId: string, msg: WWebMessage): Promise<{ 
 }
 
 async function fetchProfilePic(client: Client, contact: any): Promise<string | null> {
+  const jid = contact?.id?._serialized || contact; 
+  if (!jid || typeof jid !== 'string') return null;
+
   try {
-    const url = await contact.getProfilePicUrl();
+    // Tenta primeiro via client, que costuma ser mais estável e evita erros internos do objeto contact
+    const url = await client.getProfilePicUrl(jid);
     if (url) return url;
   } catch (err: any) {
-    logger.warn(`[ProfilePic] getProfilePicUrl failed for ${contact.id?._serialized}: ${err?.message}`);
+    // Silencioso aqui, tenta fallback
   }
   
   try {
-    const url = await client.getProfilePicUrl(contact.id._serialized);
-    return url || null;
+    // Fallback para o método do contato se o primeiro falhar
+    if (contact && typeof contact.getProfilePicUrl === 'function') {
+      const url = await contact.getProfilePicUrl();
+      return url || null;
+    }
   } catch (err: any) {
-    logger.warn(`[ProfilePic] client.getProfilePicUrl failed for ${contact.id?._serialized}: ${err?.message}`);
-    return null;
+    logger.warn(`[ProfilePic] Fallback failed for ${jid}: ${err?.message}`);
   }
+
+  return null;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -416,11 +424,11 @@ class SessionManager {
     }
   }
 
-  async getMessages(sessionId: string, chatId: string, limit: number = 50) {
+  async getMessages(sessionId: string, number: string, limit: number = 50) {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
 
-    const jid = this.formatJid(chatId);
+    const jid = this.formatJid(number);
     const chat = await session.client.getChatById(jid);
     const messages = await chat.fetchMessages({ limit });
 

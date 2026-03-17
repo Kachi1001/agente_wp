@@ -34,22 +34,22 @@ export const messageController = {
     }
   },
   async getHistory(req: Request, res: Response): Promise<void> {
-    const { sessionId, chatId, limit } = req.query;
+    const { sessionId, number, limit } = req.query;
 
-    if (!sessionId || !chatId) {
-      res.status(400).json({ error: 'Missing required query parameters: sessionId, chatId' });
+    if (!sessionId || !number) {
+      res.status(400).json({ error: 'Missing required query parameters: sessionId, number' });
       return;
     }
 
     try {
       const messages = await sessionManager.getMessages(
         sessionId as string,
-        chatId as string,
+        number as string,
         limit ? parseInt(limit as string) : 50
       );
       res.status(200).json({ success: true, history: messages });
     } catch (error: any) {
-      logger.error(error, `Failed to fetch history for session ${sessionId}, chat ${chatId}`);
+      logger.error(error, `Failed to fetch history for session ${sessionId}, number ${number}`);
       res.status(500).json({ error: 'Failed to fetch messages', details: error.message });
     }
   }
