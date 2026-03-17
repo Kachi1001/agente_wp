@@ -45,7 +45,7 @@ export const messageController = {
       const messages = await sessionManager.getMessages(
         sessionId as string,
         number as string,
-        limit ? parseInt(limit as string) : 50
+        limit ? parseInt(limit as string) : 200
       );
       res.status(200).json({ success: true, history: messages });
     } catch (error: any) {
