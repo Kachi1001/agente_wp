@@ -38,22 +38,64 @@ export function getPreviewText(msg: WWebMessage): string {
 
 /** Mapa de extensões por MIME type */
 const MIME_MAP: Record<string, string> = {
+  // Images
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'image/x-icon': 'ico',
+  'image/svg+xml': 'svg',
+  'image/tiff': 'tiff',
+  
+  // Video
   'video/mp4': 'mp4',
-  'audio/ogg': 'ogg',
+  'video/mpeg': 'mpeg',
+  'video/ogg': 'ogv',
+  'video/webm': 'webm',
+  'video/3gpp': '3gp',
+  'video/x-msvideo': 'avi',
+  'video/x-flv': 'flv',
+  'video/quicktime': 'mov',
+  'video/x-matroska': 'mkv',
+  
+  // Audio
   'audio/mpeg': 'mp3',
+  'audio/ogg': 'ogg',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/webm': 'webm',
+  'audio/aac': 'aac',
+  'audio/flac': 'flac',
   'audio/mp4': 'm4a',
   'audio/amr': 'amr',
+  'audio/opus': 'opus',
+  'audio/x-m4a': 'm4a',
+  
+  // Documents
   'application/pdf': 'pdf',
   'application/msword': 'doc',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
   'application/vnd.ms-excel': 'xls',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/rtf': 'rtf',
+  'application/json': 'json',
+  'application/xml': 'xml',
+  'text/csv': 'csv',
+  'text/html': 'html',
+  'text/plain': 'txt',
+  'text/xml': 'xml',
+  
+  // Archives
   'application/zip': 'zip',
   'application/x-zip-compressed': 'zip',
-  'text/plain': 'txt',
+  'application/x-7z-compressed': '7z',
+  'application/x-rar-compressed': 'rar',
+  'application/x-tar': 'tar',
+  'application/x-gzip': 'gz',
+  'application/x-bzip2': 'bz2',
 };
 /**
  * Baixa a mídia e salva em /public/media/<sessionId>.
@@ -613,7 +655,7 @@ class SessionManager {
 
     if (!msg) throw new Error(`Message ${messageId} not found in chat ${fromJid}`);
 
-    return await msg.forward(toJid);
+    await msg.forward(toJid);
   }
 
   async reactToMessage(sessionId: string, number: string, messageId: string, emoji: string) {
