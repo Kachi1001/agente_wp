@@ -83,16 +83,24 @@ export const messageController = {
   },
   async getHistory(req: Request, res: Response): Promise<void> {
     const { sessionId, number, limit } = req.query;
-
-    if (!sessionId || !number) {
-      res.status(400).json({ error: 'Missing required query parameters: sessionId, number' });
+    
+    // Explicit validation and type narrowing
+    if (typeof sessionId !== 'string' || typeof number !== 'string') {
+      res.status(400).json({ error: 'Missing or invalid required query parameters: sessionId, number (must be strings)' });
       return;
+    }
+
+    let jid: string;
+    if (!number.includes('@c.us')) {
+      jid = `${number}@c.us`;
+    } else {
+      jid = number;
     }
 
     try {
       const messages = await sessionManager.getMessages(
-        sessionId as string,
-        number as string,
+        sessionId,
+        jid,
         limit ? parseInt(limit as string) : 200
       );
       res.status(200).json({ success: true, history: messages });
