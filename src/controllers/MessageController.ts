@@ -81,6 +81,22 @@ export const messageController = {
       res.status(500).json({ error: 'Failed to react to message', details: error.message });
     }
   },
+  async forward(req: Request, res: Response): Promise<void> {
+    const { sessionId, from, messageId, to } = req.body;
+
+    if (!sessionId || !from || !messageId || !to) {
+      res.status(400).json({ error: 'Missing required parameters: sessionId, from, messageId, to' });
+      return;
+    }
+
+    try {
+      await sessionManager.forwardMessage(sessionId, from, messageId, to);
+      res.status(200).json({ success: true, message: 'Message forwarded successfully' });
+    } catch (error: any) {
+      logger.error(error, `Failed to forward message ${messageId} in session ${sessionId}`);
+      res.status(500).json({ error: 'Failed to forward message', details: error.message });
+    }
+  },
   async getHistory(req: Request, res: Response): Promise<void> {
     const { sessionId, number, limit } = req.query;
     
@@ -90,17 +106,11 @@ export const messageController = {
       return;
     }
 
-    let jid: string;
-    if (!number.includes('@c.us')) {
-      jid = `${number}@c.us`;
-    } else {
-      jid = number;
-    }
 
     try {
       const messages = await sessionManager.getMessages(
         sessionId,
-        jid,
+        number,
         limit ? parseInt(limit as string) : 200
       );
       res.status(200).json({ success: true, history: messages });

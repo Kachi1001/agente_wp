@@ -600,6 +600,22 @@ class SessionManager {
     return await msg.delete(true);
   }
 
+  async forwardMessage(sessionId: string, fromNumber: string, messageId: string, toNumber: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const fromJid = this.formatJid(fromNumber);
+    const toJid = this.formatJid(toNumber);
+
+    const chat = await session.client.getChatById(fromJid);
+    const messages = await chat.fetchMessages({ limit: 100 });
+    const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
+
+    if (!msg) throw new Error(`Message ${messageId} not found in chat ${fromJid}`);
+
+    await msg.forward(toJid);
+  }
+
   async reactToMessage(sessionId: string, number: string, messageId: string, emoji: string) {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
