@@ -613,7 +613,7 @@ class SessionManager {
 
     if (!msg) throw new Error(`Message ${messageId} not found in chat ${fromJid}`);
 
-    await msg.forward(toJid);
+    return await msg.forward(toJid);
   }
 
   async reactToMessage(sessionId: string, number: string, messageId: string, emoji: string) {
