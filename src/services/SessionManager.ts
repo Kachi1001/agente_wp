@@ -47,7 +47,7 @@ const MIME_MAP: Record<string, string> = {
   'image/x-icon': 'ico',
   'image/svg+xml': 'svg',
   'image/tiff': 'tiff',
-  
+
   // Video
   'video/mp4': 'mp4',
   'video/mpeg': 'mpeg',
@@ -58,7 +58,7 @@ const MIME_MAP: Record<string, string> = {
   'video/x-flv': 'flv',
   'video/quicktime': 'mov',
   'video/x-matroska': 'mkv',
-  
+
   // Audio
   'audio/mpeg': 'mp3',
   'audio/ogg': 'ogg',
@@ -71,7 +71,7 @@ const MIME_MAP: Record<string, string> = {
   'audio/amr': 'amr',
   'audio/opus': 'opus',
   'audio/x-m4a': 'm4a',
-  
+
   // Documents
   'application/pdf': 'pdf',
   'application/msword': 'doc',
@@ -87,7 +87,7 @@ const MIME_MAP: Record<string, string> = {
   'text/html': 'html',
   'text/plain': 'txt',
   'text/xml': 'xml',
-  
+
   // Archives
   'application/zip': 'zip',
   'application/x-zip-compressed': 'zip',
@@ -711,6 +711,45 @@ class SessionManager {
     ).values());
 
     return uniqueContacts;
+  }
+
+  /**
+   * Verifica se um número está registrado no WhatsApp.
+   * Retorna o ID formatado (JID) se existir, ou null caso contrário.
+   */
+  async checkNumber(sessionId: string, number: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const formattedNumber = number.includes('@c.us') ? number : `${number}@c.us`;
+
+    try {
+      const id = await session.client.getNumberId(formattedNumber);
+
+      let pushname = null;
+      let profilePicUrl = null;
+      let jid = null;
+      let lid = null;
+
+      if (id) {
+        const contact = await session.client.getContactById(id._serialized);
+        pushname = contact.pushname || contact.name || null;
+        profilePicUrl = await fetchProfilePic(session.client, contact);
+        jid = contact.id._serialized.includes('@c.us') ? contact.id._serialized : null
+        lid = id._serialized.includes('@lid') ? id._serialized : null
+      }
+      return {
+        exists: !!id,
+        jid: jid,
+        lid: lid,
+        number: number,
+        pushname: pushname,
+        profilePicUrl: profilePicUrl
+      };
+    } catch (err: any) {
+      logger.error(`[${sessionId}] Erro ao verificar número ${number}: ${err.message}`);
+      throw err;
+    }
   }
 
   async deleteSession(sessionId: string) {

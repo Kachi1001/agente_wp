@@ -274,7 +274,127 @@ curl -X DELETE http://localhost:3005/session/stop/ti-suporte
 
 ---
 
-### 4.2 Envio de Mensagens
+### 4.2 Gerenciamento de Contatos e Verificação
+
+#### `GET /contact/:sessionId/list`
+Lista todos os contatos individuais da sessão.
+
+#### `GET /contact/:sessionId/check/:number`
+Verifica se um número específico está registrado no WhatsApp.
+
+**Parâmetros de URL:**
+| Parâmetro   | Tipo   | Obrigatório | Descrição |
+|-------------|--------|-------------|-----------|
+| `sessionId` | string | Sim         | ID da sessão ativa. |
+| `number`    | string | Sim         | Número para verificar (ex: `5511999999999`). |
+
+**Resposta (`200 OK`):**
+```json
+{
+  "success": true,
+  "exists": true,
+  "jid": "5511999999999@c.us",
+  "number": "5511999999999",
+  "pushname": "João Silva",
+  "profilePicUrl": "http://localhost:3005/media/profile-pic.jpg"
+}
+```
+
+---
+
+### 4.3 Envio de Mensagens
+
+#### `POST /session/start/:id`
+
+Inicia uma nova sessão de WhatsApp. Este é **o primeiro endpoint a chamar** ao adicionar um novo número.
+
+**Parâmetros de URL:**
+| Parâmetro | Tipo   | Obrigatório | Descrição                                      |
+|-----------|--------|-------------|------------------------------------------------|
+| `id`      | string | Sim         | Nome único da sessão (ex: `ti-suporte`, `rh-geral`). Sem espaços. |
+
+**Corpo (Body) — JSON:**
+| Campo        | Tipo   | Obrigatório | Descrição                                                             |
+|--------------|--------|-------------|-----------------------------------------------------------------------|
+| `webhookUrl` | string | **Sim**     | URL completa da rota da sua aplicação Next.js que receberá as mensagens desta sessão. |
+
+**Exemplo de Requisição:**
+```bash
+curl -X POST http://localhost:3005/session/start/ti-suporte \
+  -H "Content-Type: application/json" \
+  -d '{ "webhookUrl": "http://localhost:3000/api/whatsapp-webhook" }'
+```
+
+**Resposta (`202 Accepted`):**
+```json
+{
+  "message": "Initializing session ti-suporte... Poll the /status endpoint to get the QR code.",
+  "webhookUrl": "http://localhost:3000/api/whatsapp-webhook"
+}
+```
+
+> **IMPORTANTE:** Esta rota retorna imediatamente (`202`). A conexão com o WhatsApp acontece em background. Você deve chamar o endpoint de status em loop até o QR Code aparecer.
+
+> **PERSISTÊNCIA:** O `webhookUrl` é salvo em disco dentro de `auth_keys/ti-suporte/session_config.json`. Ao reiniciar o `agente_wp`, as sessões reconectam automaticamente sem precisar chamar este endpoint novamente.
+
+---
+
+#### `GET /session/status/:id`
+
+Retorna o estado atual da sessão, incluindo o QR Code quando disponível.
+
+**Exemplo de Requisição:**
+```bash
+curl http://localhost:3005/session/status/ti-suporte
+```
+
+**Resposta quando aguardando QR Code (`200 OK`):**
+```json
+{
+  "exists": true,
+  "status": "QR_READY",
+  "qrCode": "1@longo_codigo_do_qr_code_em_base64..."
+}
+```
+
+**Resposta quando já conectado (`200 OK`):**
+```json
+{
+  "exists": true,
+  "status": "CONNECTED",
+  "qrCode": null
+}
+```
+
+**Possíveis valores de `status`:**
+| Valor          | Significado                                               |
+|----------------|-----------------------------------------------------------|
+| `STARTING`     | Aguardando inicialização do socket com WhatsApp           |
+| `QR_READY`     | QR Code disponível, aguardando leitura pelo celular       |
+| `CONNECTED`    | Celular conectado, sessão ativa e recebendo mensagens     |
+| `DISCONNECTED` | Desconectado (pode tentar reconectar automaticamente)     |
+
+---
+
+#### `DELETE /session/stop/:id`
+
+Para a sessão, desconecta o celular e apaga todos os dados de autenticação. **Ação irreversível** — o usuário precisará ler o QR Code novamente.
+
+**Exemplo de Requisição:**
+```bash
+curl -X DELETE http://localhost:3005/session/stop/ti-suporte
+```
+
+**Resposta (`200 OK`):**
+```json
+{
+  "message": "Session ti-suporte terminated and auth data deleted."
+}
+```
+
+---
+
+### 4.3 Envio de Mensagens
 
 ---
 
@@ -351,7 +471,7 @@ curl -X POST http://localhost:3005/message/send \
 
 ---
 
-### 4.3 Healthcheck
+### 4.4 Healthcheck
 
 #### `GET /health`
 Verifica se o serviço está no ar.

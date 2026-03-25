@@ -29,7 +29,7 @@ Thumbs.db
 *.tsbuildinfo
 
 .wwebjs_auth/*
-.wwebjs_cache/*
+.wwebjs_cache
 
 public/media/*
 
