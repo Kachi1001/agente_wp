@@ -29,6 +29,7 @@ app.use('/contact', contactRoutes);
 
 // Serve media files
 app.use('/media', express.static(path.join(process.cwd(), 'public', 'media')));
+app.use('/profile_pics', express.static(path.join(process.cwd(), 'public', 'profile_pics')));
 
 // Basic Healthcheck
 app.get('/health', (req, res) => {
