@@ -581,6 +581,18 @@ class SessionManager {
     return { exists: true, status: session.status, qrCode: session.qrCode };
   }
 
+  getAllSessions() {
+    const sessions: any[] = [];
+    this.sessions.forEach((data, id) => {
+      sessions.push({
+        id,
+        status: data.status,
+        qrCode: data.qrCode
+      });
+    });
+    return sessions;
+  }
+
   private formatJid(number: string): string {
     return number.includes('@c.us') ? number : `${number}@c.us`;
   }

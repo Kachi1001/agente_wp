@@ -18,6 +18,11 @@ export const sessionController = {
     });
   },
 
+  list(req: Request, res: Response): void {
+    const sessions = sessionManager.getAllSessions();
+    res.status(200).json(sessions);
+  },
+
   status(req: Request, res: Response): void {
     const id = req.params.id as string;
     const status = sessionManager.getSessionStatus(id);
