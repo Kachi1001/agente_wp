@@ -393,8 +393,13 @@ class SessionManager {
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
+      // Tratamento de IDs: se for @lid, guardamos no campo lid, mas para o jid tentamos usar o @c.us se disponível
       const lid = msg.from.includes('@lid') ? msg.from : null;
-      const jid = msg.from; // Usa o JID da conversa (grupo ou contato)
+      let jid = msg.from;
+
+      if (!isGroup && jid.includes('@lid') && contact && contact.id._serialized.includes('@c.us')) {
+        jid = contact.id._serialized;
+      }
 
       logger.info(`[${sessionId}] Mensagem recebida de lid ${lid} jid ${jid} | tipo: ${msg.type}`);
 
@@ -500,12 +505,19 @@ class SessionManager {
         }
       }
 
-      const lid = msg.to
-      const isGroup = lid.includes('@g.us')
+      const isGroup = msg.to.includes('@g.us')
       const chat = await msg.getChat()
-      const contact = await client.getContactById(isGroup ? (msg.author || msg.from) : lid)
+      const contact = await client.getContactById(isGroup ? (msg.author || msg.from) : msg.to)
       const profilePicUrl = await fetchProfilePic(client, isGroup ? chat : contact);
-      const jid = chat.id._serialized
+
+      // Tratamento de IDs na mensagem enviada (message_create)
+      const lid = msg.to.includes('@lid') ? msg.to : null;
+      let jid = chat.id._serialized;
+
+      // Se o chat for @lid e o contato tiver @c.us, preferimos o @c.us para o JID da conversa
+      if (!isGroup && jid.includes('@lid') && contact && contact.id._serialized.includes('@c.us')) {
+        jid = contact.id._serialized;
+      }
 
       const payload: any = {
         id: msg.id.id,
