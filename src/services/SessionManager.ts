@@ -379,21 +379,22 @@ class SessionManager {
     // ── MENSAGENS RECEBIDAS (de outras pessoas) ───────────────────────────────
     // Espelha exatamente a lógica do client.on('message', ...) do whatsapp.ts
     client.on('message', async (msg: WWebMessage) => {
-      // Filtro: só aceita mensagens de contatos individuais (@c.us) ou LID
-      // Descarta msgs vazias sem mídia (ex: notificações de grupo)
+      // Filtro modificado: aceita mensagens de contatos individuais e grupos
+      // Descarta msgs vazias sem mídia
       if (
-        !(msg.from.includes('@c.us') || msg.from.includes('@lid')) ||
         (msg.body === '' && !msg.hasMedia) ||
         msg.fromMe
       ) return;
 
+      const isGroup = msg.from.includes('@g.us');
+      const chat = await msg.getChat();
       const contact = await msg.getContact();
-      const profilePicUrl = await fetchProfilePic(client, contact);
+      const profilePicUrl = await fetchProfilePic(client, isGroup ? chat : contact);
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
-      const lid = msg.from.includes('@lid') ? msg.from : null
-      const jid = contact.id._serialized.includes('@c.us') ? contact.id._serialized : null
+      const lid = msg.from.includes('@lid') ? msg.from : null;
+      const jid = msg.from; // Usa o JID da conversa (grupo ou contato)
 
       logger.info(`[${sessionId}] Mensagem recebida de lid ${lid} jid ${jid} | tipo: ${msg.type}`);
 
@@ -433,6 +434,10 @@ class SessionManager {
         fromMe: false,
         jid: jid,
         lid: lid,
+        userId: msg.author || msg.from,
+        userName: pushName,
+        isGroup: isGroup,
+        groupName: isGroup ? chat.name : null,
         text: msg.body || '',
         pushName,
         previewText,
@@ -458,9 +463,8 @@ class SessionManager {
     client.on('message_create', async (msg: WWebMessage) => {
       // Só processa mensagens que eu enviei
       if (!msg.fromMe) return;
-      // Ignora grupos, newsletters e status
+      // Ignora newsletters e status (grupos agora são permitidos)
       if (
-        msg.from.includes('@g.us') ||
         msg.from.includes('newsletter') ||
         msg.from.includes('status@broadcast')
       ) return;
@@ -497,9 +501,11 @@ class SessionManager {
       }
 
       const lid = msg.to
-      const contact = await client.getContactById(lid)
-      const profilePicUrl = await fetchProfilePic(client, contact);
-      const jid = contact.id._serialized
+      const isGroup = lid.includes('@g.us')
+      const chat = await msg.getChat()
+      const contact = await client.getContactById(isGroup ? (msg.author || msg.from) : lid)
+      const profilePicUrl = await fetchProfilePic(client, isGroup ? chat : contact);
+      const jid = chat.id._serialized
 
       const payload: any = {
         id: msg.id.id,
@@ -507,6 +513,10 @@ class SessionManager {
         fromMe: true,
         lid: lid,
         jid: jid,
+        userId: msg.author || (client.info ? client.info.wid._serialized : null), // No caso de msg enviada por mim
+        userName: contact.pushname || contact.name || '',
+        isGroup: isGroup,
+        groupName: isGroup ? chat.name : null,
         text: msg.body || '',
         pushName: contact.pushname || contact.name || jid.split('@')[0],
         previewText,
@@ -594,7 +604,8 @@ class SessionManager {
   }
 
   private formatJid(number: string): string {
-    return number.includes('@c.us') ? number : `${number}@c.us`;
+    if (number.includes('@c.us') || number.includes('@g.us') || number.includes('@lid')) return number;
+    return `${number}@c.us`;
   }
 
   async sendMessage(
@@ -827,6 +838,25 @@ class SessionManager {
     ).values());
 
     return uniqueContacts;
+  }
+
+  async getGroups(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const chats = await session.client.getChats();
+    const groups = chats.filter(chat => chat.isGroup);
+
+    return Promise.all(groups.map(async (group: any) => {
+      const profilePicUrl = await fetchProfilePic(session.client, group);
+      return {
+        jid: group.id._serialized,
+        name: group.name,
+        unreadCount: group.unreadCount,
+        timestamp: group.timestamp,
+        profilePicUrl
+      };
+    }));
   }
 
   /**
