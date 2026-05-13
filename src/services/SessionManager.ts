@@ -304,6 +304,7 @@ async function fetchProfilePic(client: Client, contact: any): Promise<string | n
 class SessionManager {
   private sessions: Map<string, SessionData> = new Map();
   private authFolder: string = path.join(process.cwd(), 'auth_keys');
+  private rebooting: Set<string> = new Set();
 
   constructor() {
     if (!fs.existsSync(this.authFolder)) {
@@ -363,9 +364,8 @@ class SessionManager {
 
     // ── Desconectado ─────────────────────────────────────────────────────────
     client.on('disconnected', (reason) => {
-      logger.warn(`[${sessionId}] Desconectado: ${reason}. Reconectando em 5s...`);
-      this.handleDisconnection(sessionId, reason);
-      setTimeout(() => this.startSession(sessionId), 5000);
+      logger.warn(`[${sessionId}] Desconectado: ${reason}. Acionando auto-healing...`);
+      this.rebootSession(sessionId, `disconnected: ${reason}`);
     });
 
     // ── Mudança de Estado ───────────────────────────────────────────────────
@@ -688,8 +688,55 @@ class SessionManager {
           timestamp: resp.timestamp
         };
       }
+
+      const msg = err?.message || '';
+      if (msg.includes('detached Frame') || msg.includes('Target closed') || msg.includes('Session closed')) {
+        logger.error(`[${sessionId}] Frame morto detectado em sendMessage: ${msg}`);
+        this.rebootSession(sessionId, `sendMessage frame crash: ${msg}`);
+        throw new Error('Sessão em recuperação automática');
+      }
+
       throw err;
     }
+  }
+
+  /**
+   * Auto-healing: derruba o cliente atual (ignorando falhas) e sobe um novo
+   * navegador limpo após um breve atraso. Isolado por sessionId — não afeta
+   * sessões paralelas.
+   */
+  private rebootSession(sessionId: string, reason: string) {
+    if (this.rebooting.has(sessionId)) {
+      logger.info(`[${sessionId}] Reboot já em andamento — ignorando novo gatilho (${reason}).`);
+      return;
+    }
+    this.rebooting.add(sessionId);
+
+    logger.warn(`[${sessionId}] Iniciando reboot da sessão. Motivo: ${reason}`);
+
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.status = 'DISCONNECTED';
+      try {
+        session.client.destroy().catch(() => {});
+      } catch {
+        // Puppeteer já pode estar morto — ignorar.
+      }
+    }
+
+    this.handleDisconnection(sessionId, reason);
+
+    setTimeout(async () => {
+      try {
+        this.sessions.delete(sessionId);
+        await this.startSession(sessionId);
+        logger.info(`[${sessionId}] Reboot concluído — sessão reinicializada.`);
+      } catch (e: any) {
+        logger.error(`[${sessionId}] Falha no reboot: ${e?.message}`);
+      } finally {
+        this.rebooting.delete(sessionId);
+      }
+    }, 7000);
   }
 
   async getMessages(sessionId: string, number: string, limit: number = 50) {
