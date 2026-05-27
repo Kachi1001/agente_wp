@@ -192,6 +192,28 @@ function hasValidProfilePicCache(jid: string): boolean {
   return age < PROFILE_PIC_TTL_MS;
 }
 
+/**
+ * Versão usada nos handlers de mensagem:
+ * - Se o arquivo já existe (qualquer idade) → retorna do disco imediatamente.
+ * - Se nunca existiu (contato novo) → busca uma vez no WhatsApp e salva.
+ * O re-download de caches expirados fica exclusivamente no warm-up do start.
+ */
+async function fetchProfilePicIfNew(client: Client, contact: any): Promise<string | null> {
+  const jid = contact?.id?._serialized || (typeof contact === 'string' ? contact : null);
+  if (!jid) return null;
+
+  const safeId = jid.replace(/[^a-zA-Z0-9@.-]/g, '_');
+  const filePath = path.join(PROFILE_PICS_DIR, `${safeId}.jpg`);
+
+  // Qualquer cache existente → retorna direto, sem tocar no WhatsApp
+  if (fs.existsSync(filePath)) {
+    return `${config.baseUrl}/profile_pics/${safeId}.jpg`;
+  }
+
+  // Contato novo → delega ao fetchProfilePic completo (baixa e salva)
+  return fetchProfilePic(client, contact);
+}
+
 async function fetchProfilePic(client: Client, contact: any): Promise<string | null> {
   const jid = contact?.id?._serialized || contact;
 
@@ -331,6 +353,12 @@ class SessionManager {
       // Health check ativo — dispara reboot se o pupPage parar de responder.
       this.startHealthCheck(sessionId);
 
+      // Aquece o cache de fotos de perfil em background.
+      // Delay de 5s para o WhatsApp estabilizar antes de começar as requisições.
+      setTimeout(() => {
+        this.warmProfilePicCache(sessionId, client).catch(() => {});
+      }, 5000);
+
       // Notifica o status via NotifyService (Socket.IO)
       import('./NotifyService').then(({ NotifyService }) => {
         NotifyService.notifyStatus(sessionId, 'session.connected', { status: 'CONNECTED' });
@@ -378,7 +406,7 @@ class SessionManager {
       const isGroup = msg.from.includes('@g.us');
       const chat = await msg.getChat();
       const contact = await msg.getContact();
-      const profilePicUrl = await fetchProfilePic(client, isGroup ? chat : contact);
+      const profilePicUrl = await fetchProfilePicIfNew(client, isGroup ? chat : contact);
       const pushName = contact.pushname || contact.name || '';
       const previewText = getPreviewText(msg);
 
@@ -497,7 +525,7 @@ class SessionManager {
       const isGroup = msg.to.includes('@g.us')
       const chat = await msg.getChat()
       const contact = await client.getContactById(isGroup ? (msg.author || msg.from) : msg.to)
-      const profilePicUrl = await fetchProfilePic(client, isGroup ? chat : contact);
+      const profilePicUrl = await fetchProfilePicIfNew(client, isGroup ? chat : contact);
 
       // Tratamento de IDs na mensagem enviada (message_create)
       const lid = msg.to.includes('@lid') ? msg.to : null;
@@ -788,6 +816,59 @@ class SessionManager {
   }
 
   /**
+   * Aquece o cache local de fotos de perfil logo após a sessão conectar.
+   * Processa os contatos em lotes para não sobrecarregar o WhatsApp.
+   * Após o warm-up, fetchProfilePic retorna instantaneamente do disco
+   * em vez de buscar no WhatsApp a cada mensagem recebida/enviada.
+   */
+  private async warmProfilePicCache(sessionId: string, client: Client): Promise<void> {
+    logger.info(`[${sessionId}] Iniciando warm-up do cache de fotos de perfil...`);
+    try {
+      const contacts = await client.getContacts();
+
+      const eligible = contacts.filter(c => {
+        const jid = c.id._serialized;
+        return (
+          !jid.includes('@g.us') &&
+          !jid.includes('@newsletter') &&
+          !jid.includes('@broadcast') &&
+          !jid.includes('@lid')
+        );
+      });
+
+      // Só baixa quem ainda não tem cache válido (< 24h)
+      const stale = eligible.filter(c => !hasValidProfilePicCache(c.id._serialized));
+      logger.info(`[${sessionId}] Warm-up: ${stale.length}/${eligible.length} contatos sem cache válido.`);
+
+      if (stale.length === 0) return;
+
+      const BATCH = 5;
+      const DELAY_MS = 400; // entre lotes — evita rate-limit do WhatsApp
+
+      for (let i = 0; i < stale.length; i += BATCH) {
+        // Abort se a sessão cair durante o warm-up
+        const s = this.sessions.get(sessionId);
+        if (!s || s.status !== 'CONNECTED') {
+          logger.info(`[${sessionId}] Warm-up interrompido — sessão desconectada.`);
+          return;
+        }
+
+        await Promise.allSettled(
+          stale.slice(i, i + BATCH).map(c => fetchProfilePic(client, c).catch(() => null))
+        );
+
+        if (i + BATCH < stale.length) {
+          await new Promise(r => setTimeout(r, DELAY_MS));
+        }
+      }
+
+      logger.info(`[${sessionId}] Warm-up de fotos concluído.`);
+    } catch (err: any) {
+      logger.warn(`[${sessionId}] Warm-up de fotos falhou: ${err.message}`);
+    }
+  }
+
+  /**
    * Auto-healing: derruba o cliente atual (incluindo kill do Chromium) e sobe
    * um novo navegador limpo após um breve atraso.
    * Isolado por sessionId — não afeta sessões paralelas.
@@ -888,7 +969,7 @@ class SessionManager {
         quotedMsg,
         isForwarded: msg.isForwarded,
         forwardingScore: msg.forwardingScore,
-        profilePicUrl: await fetchProfilePic(session.client, contact),
+        profilePicUrl: await fetchProfilePicIfNew(session.client, contact),
       };
     }));
   }
