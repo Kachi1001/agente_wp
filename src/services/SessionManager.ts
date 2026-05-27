@@ -180,137 +180,102 @@ export async function saveMedia(sessionId: string, msg: WWebMessage): Promise<{ 
   }
 }
 
+const PROFILE_PICS_DIR = path.join(process.cwd(), 'public', 'profile_pics');
+const PROFILE_PIC_TTL_MS = 24 * 60 * 60 * 1000; // 24 horas
+
+/** Retorna true se já existe cache válido (< 24h) para o JID. */
+function hasValidProfilePicCache(jid: string): boolean {
+  const safeId = jid.replace(/[^a-zA-Z0-9@.-]/g, '_');
+  const filePath = path.join(PROFILE_PICS_DIR, `${safeId}.jpg`);
+  if (!fs.existsSync(filePath)) return false;
+  const age = Date.now() - fs.statSync(filePath).mtimeMs;
+  return age < PROFILE_PIC_TTL_MS;
+}
+
 async function fetchProfilePic(client: Client, contact: any): Promise<string | null> {
   const jid = contact?.id?._serialized || contact;
-  logger.info(`[ProfilePicDebug] Started fetchProfilePic for JID: ${jid}, typeof contact: ${typeof contact}`);
 
-  if (!jid || typeof jid !== 'string') {
-    logger.info(`[ProfilePicDebug] Aborting, invalid jid: ${jid}`);
-    return null;
-  }
+  if (!jid || typeof jid !== 'string') return null;
 
-  // Mock de propriedades que podem estar faltando e causando crash na lib
+  // Mock de propriedades que podem causar crash na lib
   if (contact && typeof contact === 'object') {
     if (contact.isNewsletter === undefined) contact.isNewsletter = false;
     if (contact.isGroup === undefined) contact.isGroup = false;
   }
 
-  // Verifica cache local
-  const safeId = jid.replace(/[^a-zA-Z0-9@.-]/g, '_'); // Sanitizar o JID para ser nome de arquivo
-  const profilePicsDir = path.join(process.cwd(), 'public', 'profile_pics');
-  const filePath = path.join(profilePicsDir, `${safeId}.jpg`);
-  
-  // Confere existência da pasta
-  if (!fs.existsSync(profilePicsDir)) {
-    fs.mkdirSync(profilePicsDir, { recursive: true });
+  const safeId = jid.replace(/[^a-zA-Z0-9@.-]/g, '_');
+  const filePath = path.join(PROFILE_PICS_DIR, `${safeId}.jpg`);
+
+  if (!fs.existsSync(PROFILE_PICS_DIR)) {
+    fs.mkdirSync(PROFILE_PICS_DIR, { recursive: true });
   }
 
-  // Lógica de cache (24 horas)
+  // Cache válido → retorna imediatamente sem tocar no WhatsApp
+  if (hasValidProfilePicCache(jid)) {
+    return `${config.baseUrl}/profile_pics/${safeId}.jpg`;
+  }
+
+  // Cache expirado ou ausente — precisa baixar
   if (fs.existsSync(filePath)) {
-    const stats = fs.statSync(filePath);
-    const msInDay = 24 * 60 * 60 * 1000;
-    const isOld = (new Date().getTime() - stats.mtime.getTime()) > msInDay;
-    
-    // Se ainda for válido (não é old), retorna direto a URL cacheada local
-    if (!isOld) {
-      logger.info(`[ProfilePicDebug] Returning cached profile pic for ${jid}: ${safeId}.jpg`);
-      return `${config.baseUrl}/profile_pics/${safeId}.jpg`;
-    } else {
-      logger.info(`[ProfilePicDebug] Cache is old for ${jid}, proceeding to download.`);
-    }
-    // Caso seja antigo, continua para baixar, tentar sobrescrever
-  } else {
-    logger.info(`[ProfilePicDebug] No local cache found for ${jid} at ${filePath}`);
+    logger.info(`[ProfilePic] Cache expirado para ${jid}, rebaixando...`);
   }
 
-  // Se o client/contact não for objeto, interrompe o download via internet
-  if (typeof contact === 'string') {
-    logger.info(`[ProfilePicDebug] Contact is string, cannot fetch URL from WhatsApp for ${jid}`);
-    return null;
-  }
+  // Sem objeto de contato não conseguimos buscar no WhatsApp
+  if (typeof contact === 'string') return null;
 
-  let whatsappUrl = null;
-  
+  let whatsappUrl: string | null = null;
+
   try {
-    logger.info(`[ProfilePicDebug] Attempting direct WWebJS.getProfilePicUrl bypass for ${jid}`);
     const scanResult: any = await (client as any).pupPage.evaluate(async (contactId: string) => {
       try {
         const win = window as any;
         const Store = win.Store;
-        if (!Store || !Store.WidFactory || !Store.ProfilePic) return { error: 'No Store/ProfilePic' };
-        
-        // --- REMÉDIO GLOBAL (GOLPE DE MESTRE) ---
-        // A causa do erro é que o WhatsApp Web espera que TODOS os WIDs tenham 'isNewsletter'.
-        // Vamos injetar isso no protótipo de TODOS os WIDs para que nunca mais dê undefined.
+        if (!Store || !Store.WidFactory || !Store.ProfilePicThumb) return null;
+
+        // Garante que isNewsletter existe no protótipo do WID (evita crash interno)
         try {
-            const testWid = Store.WidFactory.createWid(contactId);
-            const WidProto = Object.getPrototypeOf(testWid);
-            if (WidProto && typeof WidProto.isNewsletter === 'undefined') {
-                Object.defineProperty(WidProto, 'isNewsletter', {
-                    get: function() { return false; },
-                    configurable: true
-                });
-            }
-        } catch (e) {}
-        
+          const testWid = Store.WidFactory.createWid(contactId);
+          const proto = Object.getPrototypeOf(testWid);
+          if (proto && typeof proto.isNewsletter === 'undefined') {
+            Object.defineProperty(proto, 'isNewsletter', { get: () => false, configurable: true });
+          }
+        } catch (_) {}
+
         const wid = Store.WidFactory.createWid(contactId);
-        
-        let eurl = null;
-        try {
-            // Tenta forçar a sincronização caso a foto não esteja na memória
-            await Store.ProfilePicThumb.find(wid).catch(() => {});
-            
-            // Pega o modelo de foto diretamente da coleção unificada
-            const thumb = Store.ProfilePicThumb.get(wid);
-            if (thumb && thumb.eurl) {
-                eurl = thumb.eurl;
-            }
-        } catch(e) {}
-        
-        return eurl;
-      } catch (e: any) {
+        await Store.ProfilePicThumb.find(wid).catch(() => {});
+        const thumb = Store.ProfilePicThumb.get(wid);
+        return thumb?.eurl ?? null;
+      } catch (_) {
         return null;
       }
     }, jid);
 
     whatsappUrl = scanResult || null;
-    
-    logger.info(`[ProfilePicDebug] Result: ${whatsappUrl}`);
   } catch (err: any) {
-    logger.error(`[ProfilePicDebug] pupPage evaluation failed: ${err.message}`);
+    logger.warn(`[ProfilePic] Falha ao buscar URL para ${jid}: ${err.message}`);
   }
 
-  if (!whatsappUrl) {
-    logger.info(`[ProfilePicDebug] Both getProfilePicUrl attempts failed or returned null for ${jid}. Returning null.`);
-    return null;
-  }
+  if (!whatsappUrl) return null;
 
-  // Realizar o download com axios interceptando
   try {
-    logger.info(`[ProfilePicDebug] Downloading image from URL: ${whatsappUrl}`);
     const response = await axios.get(whatsappUrl, {
       responseType: 'arraybuffer',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
       },
-      timeout: 10000 // Timeout de 10 segundos
+      timeout: 10000,
     });
 
-    // Se OK, salvar no disco e retornar URI local
     if (response.status === 200) {
       fs.writeFileSync(filePath, Buffer.from(response.data));
-      logger.info(`[ProfilePicDebug] Successfully downloaded and saved image to ${filePath}`);
+      logger.info(`[ProfilePic] Foto salva: ${safeId}.jpg`);
       return `${config.baseUrl}/profile_pics/${safeId}.jpg`;
-    } else {
-      logger.info(`[ProfilePicDebug] Axios download returned status ${response.status}`);
     }
   } catch (e: any) {
-    logger.error(`[ProfilePicDebug] Axios download failed: ${e.message}`);
+    logger.warn(`[ProfilePic] Download falhou para ${jid}: ${e.message}`);
   }
 
-  // Falha final, mas sem quebrar.
-  logger.info(`[ProfilePicDebug] Reached the end with failure for ${jid}`);
   return null;
 }
 
