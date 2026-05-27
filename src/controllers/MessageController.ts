@@ -97,6 +97,23 @@ export const messageController = {
       res.status(500).json({ error: 'Failed to forward message', details: error.message });
     }
   },
+  async markAsRead(req: Request, res: Response): Promise<void> {
+    const { sessionId, chatId } = req.body;
+
+    if (!sessionId || !chatId) {
+      res.status(400).json({ error: 'Missing required parameters: sessionId, chatId' });
+      return;
+    }
+
+    try {
+      await sessionManager.markAsRead(sessionId, chatId);
+      res.status(200).json({ success: true, message: 'Chat marked as read' });
+    } catch (error: any) {
+      logger.error(error, `Failed to mark as read for session ${sessionId}, chat ${chatId}`);
+      res.status(500).json({ error: 'Failed to mark as read', details: error.message });
+    }
+  },
+
   async getHistory(req: Request, res: Response): Promise<void> {
     const { sessionId, number, limit } = req.query;
     

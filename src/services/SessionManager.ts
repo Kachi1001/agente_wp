@@ -1052,6 +1052,27 @@ class SessionManager {
     );
   }
 
+  getSessionInfo(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const info = (session.client as any).info;
+    if (!info) throw new Error('Session info not available yet');
+
+    return {
+      jid: info.wid?._serialized ?? null,
+      number: info.wid?.user ?? null,
+      pushname: info.pushname ?? null,
+      platform: info.platform ?? null,
+    };
+  }
+
+  triggerReboot(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error('Session not found');
+    this.rebootSession(sessionId, 'manual restart via API');
+  }
+
   async getGroups(sessionId: string) {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
@@ -1064,11 +1085,69 @@ class SessionManager {
       return {
         jid: group.id._serialized,
         name: group.name,
+        description: group.description ?? null,
         unreadCount: group.unreadCount,
         timestamp: group.timestamp,
+        participantCount: group.participants?.length ?? null,
         profilePicUrl
       };
     }));
+  }
+
+  async getGroupInfo(sessionId: string, groupId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = groupId.includes('@g.us') ? groupId : `${groupId}@g.us`;
+    const chat = await session.client.getChatById(jid) as any;
+    if (!chat || !chat.isGroup) throw new Error('Group not found');
+
+    const profilePicUrl = await fetchProfilePic(session.client, chat).catch(() => null);
+
+    let inviteCode: string | null = null;
+    try { inviteCode = await chat.getInviteCode(); } catch {}
+
+    return {
+      jid: chat.id._serialized,
+      name: chat.name,
+      description: chat.description ?? null,
+      inviteLink: inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : null,
+      participantCount: chat.participants?.length ?? 0,
+      unreadCount: chat.unreadCount,
+      timestamp: chat.timestamp,
+      profilePicUrl,
+    };
+  }
+
+  async getGroupMembers(sessionId: string, groupId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = groupId.includes('@g.us') ? groupId : `${groupId}@g.us`;
+    const chat = await session.client.getChatById(jid) as any;
+    if (!chat || !chat.isGroup) throw new Error('Group not found');
+
+    return Promise.all((chat.participants ?? []).map(async (p: any) => {
+      const memberJid: string = p.id._serialized;
+      const number = memberJid.includes('@') ? memberJid.split('@')[0] : memberJid;
+      const profilePicUrl = await fetchProfilePic(session.client, memberJid).catch(() => null);
+      return {
+        jid: memberJid,
+        number,
+        isAdmin: p.isAdmin ?? false,
+        isSuperAdmin: p.isSuperAdmin ?? false,
+        profilePicUrl,
+      };
+    }));
+  }
+
+  async markAsRead(sessionId: string, chatId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = this.formatJid(chatId);
+    const chat = await session.client.getChatById(jid);
+    await chat.sendSeen();
   }
 
   /**

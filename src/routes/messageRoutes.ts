@@ -10,6 +10,7 @@ router.post('/edit', messageController.edit);
 router.post('/delete', messageController.delete);
 router.post('/react', messageController.react);
 router.post('/forward', messageController.forward);
+router.post('/read', messageController.markAsRead);
 router.get('/history', messageController.getHistory);
 
 export default router;

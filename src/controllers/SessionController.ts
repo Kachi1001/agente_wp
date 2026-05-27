@@ -68,5 +68,25 @@ export const sessionController = {
 
     sessionManager.deleteSession(id);
     res.status(200).json({ message: `Session ${id} terminated and auth data deleted.` });
-  }
+  },
+
+  info(req: Request, res: Response): void {
+    const id = req.params.id as string;
+    try {
+      const info = sessionManager.getSessionInfo(id);
+      res.status(200).json({ success: true, ...info });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  },
+
+  restart(req: Request, res: Response): void {
+    const id = req.params.id as string;
+    try {
+      sessionManager.triggerReboot(id);
+      res.status(202).json({ message: `Session ${id} restart triggered. Poll /status to track reconnection.` });
+    } catch (err: any) {
+      res.status(404).json({ error: err.message });
+    }
+  },
 };
