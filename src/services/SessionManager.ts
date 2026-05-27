@@ -618,6 +618,21 @@ class SessionManager {
 
     client.initialize().catch(err => {
       logger.error(`[${sessionId}] Falha ao inicializar: ${err.message}`);
+
+      // "The browser is already connected/running" — o processo anterior ainda
+      // não morreu. A lib não resolve sozinha; acionamos um novo reboot para
+      // que killBrowser() mate o zumbi antes da próxima tentativa.
+      const msg: string = err?.message || '';
+      if (
+        msg.includes('browser is already') ||
+        msg.includes('Failed to launch') ||
+        isDeadFrameError(err)
+      ) {
+        logger.warn(`[${sessionId}] Erro de inicialização recuperável — agendando reboot.`);
+        // Remove da lista de rebooting para que rebootSession() consiga entrar
+        this.rebooting.delete(sessionId);
+        setTimeout(() => this.rebootSession(sessionId, `initialize error: ${msg}`), 3000);
+      }
     });
   }
 
@@ -784,9 +799,33 @@ class SessionManager {
   }
 
   /**
-   * Auto-healing: derruba o cliente atual (ignorando falhas) e sobe um novo
-   * navegador limpo após um breve atraso. Isolado por sessionId — não afeta
-   * sessões paralelas.
+   * Mata o processo do Chromium de forma agressiva antes de destruir o client.
+   * Necessário porque destroy() às vezes retorna sem ter fechado o browser —
+   * o processo fica zumbi e o próximo initialize() lança "The browser is already".
+   */
+  private async killBrowser(client: Client): Promise<void> {
+    // 1. Tenta fechar a página graciosamente
+    try {
+      const page = (client as any).pupPage;
+      if (page && !page.isClosed?.()) await page.close().catch(() => {});
+    } catch {}
+
+    // 2. Fecha o browser
+    try {
+      const browser = (client as any).pupBrowser;
+      if (browser) await browser.close().catch(() => {});
+    } catch {}
+
+    // 3. Por último, destroy() da lib para limpar o estado interno
+    try {
+      await client.destroy().catch(() => {});
+    } catch {}
+  }
+
+  /**
+   * Auto-healing: derruba o cliente atual (incluindo kill do Chromium) e sobe
+   * um novo navegador limpo após um breve atraso.
+   * Isolado por sessionId — não afeta sessões paralelas.
    */
   private rebootSession(sessionId: string, reason: string) {
     if (this.rebooting.has(sessionId)) {
@@ -804,14 +843,15 @@ class SessionManager {
         clearInterval(session.healthTimer);
         session.healthTimer = undefined;
       }
-      try {
-        session.client.destroy().catch(() => {});
-      } catch {
-        // Puppeteer já pode estar morto — ignorar.
-      }
     }
 
     this.handleDisconnection(sessionId, reason);
+
+    // Kill async — não bloqueia o fluxo, mas garante que o browser morre
+    // antes de subirmos o novo startSession (o setTimeout cobre a janela).
+    if (session) {
+      this.killBrowser(session.client).catch(() => {});
+    }
 
     setTimeout(async () => {
       try {
@@ -820,7 +860,6 @@ class SessionManager {
         logger.info(`[${sessionId}] Reboot concluído — sessão reinicializada.`);
       } catch (e: any) {
         logger.error(`[${sessionId}] Falha no reboot: ${e?.message}`);
-      } finally {
         this.rebooting.delete(sessionId);
       }
     }, 7000);
