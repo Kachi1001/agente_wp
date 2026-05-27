@@ -45,7 +45,12 @@ app.use('/group',   conditionalAuth, groupRoutes);
 
 // Serve media files
 app.use('/media', express.static(path.join(process.cwd(), 'public', 'media')));
+
+// Serve profile pics — fallback para avatar padrão quando a foto não existe
 app.use('/profile_pics', express.static(path.join(process.cwd(), 'public', 'profile_pics')));
+app.use('/profile_pics', (_req: Request, res: Response) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'default_avatar.svg'));
+});
 
 // Basic Healthcheck
 app.get('/health', (req, res) => {

@@ -32,6 +32,7 @@ Thumbs.db
 .wwebjs_cache
 
 /public/*
+!/public/default_avatar.svg
 
 # --- AI Reviewer Local ---
 AI_CHANGELOG.md
