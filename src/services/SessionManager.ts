@@ -12,6 +12,23 @@ interface SessionData {
   client: Client;
   status: SessionState;
   qrCode: string | null;
+  healthTimer?: NodeJS.Timeout;
+}
+
+// Padrões de erro que indicam que o Chromium/frame morreu — não há recuperação
+// possível via retry; somente reiniciando o navegador.
+const DEAD_FRAME_PATTERNS = [
+  'detached Frame',
+  'Target closed',
+  'Session closed',
+  'Protocol error',
+  'Execution context was destroyed',
+  'Most likely the page has been closed',
+];
+
+export function isDeadFrameError(err: any): boolean {
+  const msg = err?.message || String(err || '');
+  return DEAD_FRAME_PATTERNS.some(p => msg.includes(p));
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -341,6 +358,13 @@ class SessionManager {
       logger.info(`[${sessionId}] Sessao conectada com sucesso!`);
       const session = this.sessions.get(sessionId);
       if (session) { session.status = 'CONNECTED'; session.qrCode = null; }
+
+      // Anexa listeners diretos no Puppeteer — capturam crashes que a
+      // whatsapp-web.js NÃO consegue propagar como 'disconnected' (ex.: OOM
+      // do Chromium, frame detached por reload forçado da Meta).
+      this.attachPuppeteerWatchdog(sessionId, client);
+      // Health check ativo — dispara reboot se o pupPage parar de responder.
+      this.startHealthCheck(sessionId);
 
       // Notifica o status via NotifyService (Socket.IO)
       import('./NotifyService').then(({ NotifyService }) => {
@@ -689,15 +713,74 @@ class SessionManager {
         };
       }
 
-      const msg = err?.message || '';
-      if (msg.includes('detached Frame') || msg.includes('Target closed') || msg.includes('Session closed')) {
-        logger.error(`[${sessionId}] Frame morto detectado em sendMessage: ${msg}`);
-        this.rebootSession(sessionId, `sendMessage frame crash: ${msg}`);
+      if (isDeadFrameError(err)) {
+        logger.error(`[${sessionId}] Frame morto detectado em sendMessage: ${err?.message}`);
+        this.rebootSession(sessionId, `sendMessage frame crash: ${err?.message}`);
         throw new Error('Sessão em recuperação automática');
       }
 
       throw err;
     }
+  }
+
+  /**
+   * Anexa listeners diretos no Puppeteer (browser/page). Necessário porque a
+   * whatsapp-web.js às vezes não emite 'disconnected' quando o Chromium morre
+   * de forma abrupta — o próprio runtime que emitiria o evento já está morto.
+   */
+  private attachPuppeteerWatchdog(sessionId: string, client: Client) {
+    const browser = (client as any).pupBrowser;
+    const page = (client as any).pupPage;
+
+    if (browser && typeof browser.on === 'function') {
+      browser.on('disconnected', () => {
+        logger.error(`[${sessionId}] Puppeteer browser DISCONNECTED — acionando reboot.`);
+        this.rebootSession(sessionId, 'puppeteer browser disconnected');
+      });
+    }
+
+    if (page && typeof page.on === 'function') {
+      page.on('close', () => {
+        logger.error(`[${sessionId}] Puppeteer page CLOSED — acionando reboot.`);
+        this.rebootSession(sessionId, 'puppeteer page closed');
+      });
+      page.on('error', (err: any) => {
+        logger.error(`[${sessionId}] Puppeteer page ERROR: ${err?.message} — acionando reboot.`);
+        this.rebootSession(sessionId, `puppeteer page error: ${err?.message}`);
+      });
+    }
+  }
+
+  /**
+   * Health check ativo: a cada 30s, faz uma operação leve no pupPage. Se
+   * falhar (frame detached, contexto destruído, timeout), dispara reboot.
+   * Cobre o cenário em que o frame trava sem emitir nenhum evento.
+   */
+  private startHealthCheck(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (session.healthTimer) clearInterval(session.healthTimer);
+
+    session.healthTimer = setInterval(async () => {
+      const s = this.sessions.get(sessionId);
+      if (!s || s.status !== 'CONNECTED' || this.rebooting.has(sessionId)) return;
+
+      const page = (s.client as any).pupPage;
+      if (!page || page.isClosed?.()) {
+        logger.error(`[${sessionId}] HealthCheck: pupPage ausente/fechado — reboot.`);
+        this.rebootSession(sessionId, 'healthcheck: pupPage closed');
+        return;
+      }
+
+      try {
+        const probe = page.evaluate(() => 1);
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('healthcheck timeout')), 10000));
+        await Promise.race([probe, timeout]);
+      } catch (err: any) {
+        logger.error(`[${sessionId}] HealthCheck falhou (${err?.message}) — reboot.`);
+        this.rebootSession(sessionId, `healthcheck: ${err?.message}`);
+      }
+    }, 30000);
   }
 
   /**
@@ -717,6 +800,10 @@ class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.status = 'DISCONNECTED';
+      if (session.healthTimer) {
+        clearInterval(session.healthTimer);
+        session.healthTimer = undefined;
+      }
       try {
         session.client.destroy().catch(() => {});
       } catch {
@@ -857,7 +944,7 @@ class SessionManager {
     return await msg.react(emoji);
   }
 
-  async getContacts(sessionId: string) {
+  async getContacts(sessionId: string, opts: { withProfilePic?: boolean } = {}) {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
 
@@ -867,9 +954,11 @@ class SessionManager {
     const formattedContacts = await Promise.all(rawContacts.map(async (contact) => {
       let jid = contact.id._serialized;
 
-      if (jid.includes('@g.us') || jid.includes('@newsletter')) {
+      // Ignora grupos, newsletters e status
+      if (jid.includes('@g.us') || jid.includes('@newsletter') || jid.includes('@broadcast')) {
         return null;
       }
+
       // Se for @lid, tentamos obter o @c.us (JID)
       if (jid.includes('@lid')) {
         try {
@@ -882,21 +971,46 @@ class SessionManager {
         }
       }
 
+      // Extrai o número de telefone a partir do JID (ex: "5511999998888@c.us" → "5511999998888")
+      const number = jid.includes('@') ? jid.split('@')[0] : jid;
+
+      // Foto de perfil (opcional — pode ser lento para listas grandes)
+      let profilePicUrl: string | null = null;
+      if (opts.withProfilePic) {
+        profilePicUrl = await fetchProfilePic(session.client, contact).catch(() => null);
+      }
+
       return {
         jid,
+        number,
         name: contact.name || '',
-        pushname: contact.pushname || ''
+        pushname: contact.pushname || '',
+        isMyContact: (contact as any).isMyContact ?? false,
+        isUser: (contact as any).isUser ?? true,
+        profilePicUrl,
       };
     }));
 
     // Remove duplicatas caso a resolução de LID tenha resultado em um JID que já existe na lista
     const uniqueContacts = Array.from(new Map(
       formattedContacts
-        .filter((c): c is { jid: string; name: string; pushname: string } => c !== null)
+        .filter((c): c is NonNullable<typeof formattedContacts[0]> => c !== null)
         .map(c => [c.jid, c])
     ).values());
 
     return uniqueContacts;
+  }
+
+  async searchContacts(sessionId: string, query: string, opts: { withProfilePic?: boolean } = {}) {
+    const contacts = await this.getContacts(sessionId, opts);
+    const q = query.toLowerCase().trim();
+    if (!q) return contacts;
+
+    return contacts.filter(c =>
+      c.name.toLowerCase().includes(q) ||
+      c.pushname.toLowerCase().includes(q) ||
+      c.number.includes(q)
+    );
   }
 
   async getGroups(sessionId: string) {
@@ -961,6 +1075,10 @@ class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       logger.info(`[${sessionId}] Encerrando sessao...`);
+      if (session.healthTimer) {
+        clearInterval(session.healthTimer);
+        session.healthTimer = undefined;
+      }
       try {
         await session.client.logout();
         await session.client.destroy();

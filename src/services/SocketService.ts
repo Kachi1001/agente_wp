@@ -5,6 +5,8 @@ import { sessionManager } from './SessionManager';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { config } from '../config';
+
 class SocketService {
   private io: SocketIOServer | null = null;
 
@@ -15,6 +17,23 @@ class SocketService {
         methods: ["GET", "POST"]
       }
     });
+
+    // ── AUTHENTICATION MIDDLEWARE (só ativo com AUTH_ENABLED=true) ──
+    const AUTH_ENABLED = process.env.AUTH_ENABLED === 'true';
+    if (AUTH_ENABLED) {
+      this.io.use((socket, next) => {
+        const token = socket.handshake.query.token || socket.handshake.auth.token;
+        const secret = config.webhookSecret;
+
+        // Sem segredo configurado, libera (útil em dev)
+        if (!secret) return next();
+
+        if (token === secret) return next();
+
+        logger.error(`[Socket.IO] Auth falhou para cliente ${socket.id} — token inválido.`);
+        return next(new Error('Authentication error: Invalid token'));
+      });
+    }
 
     this.io.on('connection', (socket) => {
       const sessionId = socket.handshake.query.sessionId as string;

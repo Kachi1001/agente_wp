@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -7,6 +7,7 @@ import sessionRoutes from './routes/sessionRoutes';
 import messageRoutes from './routes/messageRoutes';
 import contactRoutes from './routes/contactRoutes';
 import groupRoutes from './routes/groupRoutes';
+import { authMiddleware } from './middleware/auth';
 import { sessionManager } from './services/SessionManager';
 import { socketService } from './services/SocketService';
 import { logger } from './utils/logger';
@@ -19,15 +20,28 @@ const httpServer = createServer(app);
 
 const PORT = process.env.PORT || 3005;
 
+// Feature flag: auth só entra em ação quando AUTH_ENABLED=true
+// Sem essa variável no servidor, todos os requests passam sem verificação
+const AUTH_ENABLED = process.env.AUTH_ENABLED === 'true';
+const conditionalAuth = AUTH_ENABLED
+  ? authMiddleware
+  : (_req: Request, _res: Response, next: NextFunction) => next();
+
+if (AUTH_ENABLED) {
+  logger.info('[Auth] Autenticação ATIVADA — todas as rotas exigem token.');
+} else {
+  logger.info('[Auth] Autenticação DESATIVADA (AUTH_ENABLED não definido).');
+}
+
 // Global Middleware
 app.use(cors());
 app.use(express.json());
 
-// App Routes
-app.use('/session', sessionRoutes);
-app.use('/message', messageRoutes);
-app.use('/contact', contactRoutes);
-app.use('/group', groupRoutes);
+// Rotas (protegidas ou abertas conforme AUTH_ENABLED)
+app.use('/session', conditionalAuth, sessionRoutes);
+app.use('/message', conditionalAuth, messageRoutes);
+app.use('/contact', conditionalAuth, contactRoutes);
+app.use('/group',   conditionalAuth, groupRoutes);
 
 // Serve media files
 app.use('/media', express.static(path.join(process.cwd(), 'public', 'media')));
