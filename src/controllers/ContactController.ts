@@ -20,7 +20,7 @@ export const contactController = {
     const withProfilePic = req.query.withProfilePic === 'true';
 
     try {
-      const contacts = await sessionManager.getContacts(sessionId, { withProfilePic });
+      const contacts = await sessionManager.getContacts(sessionId as string, { withProfilePic });
       res.status(200).json({ success: true, total: contacts.length, contacts });
     } catch (error: any) {
       logger.error(error, `Failed to fetch contacts for session ${sessionId}`);
@@ -51,7 +51,7 @@ export const contactController = {
     }
 
     try {
-      const contacts = await sessionManager.searchContacts(sessionId, query, { withProfilePic });
+      const contacts = await sessionManager.searchContacts(sessionId as string, query, { withProfilePic });
       res.status(200).json({ success: true, query, total: contacts.length, contacts });
     } catch (error: any) {
       logger.error(error, `Failed to search contacts for session ${sessionId}`);
