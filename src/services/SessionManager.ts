@@ -327,6 +327,9 @@ class SessionManager {
       puppeteer: {
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        // getContacts() em contas com muitos contatos pode estourar o
+        // protocolTimeout padrão (180s) do puppeteer. Aumentamos para 10min.
+        protocolTimeout: 600000,
       },
     });
 
@@ -530,8 +533,16 @@ class SessionManager {
 
       const isGroup = msg.to.includes('@g.us')
       const chat = await msg.getChat()
-      const contact = await client.getContactById(isGroup ? (msg.author || msg.from) : msg.to)
-      const profilePicUrl = await fetchProfilePicIfNew(client, isGroup ? chat : contact);
+      const contactId = isGroup ? (msg.author || msg.from) : msg.to;
+      // getContactById pode lançar "getAlternateUserWid - Invalid get call using deviceWid"
+      // para alguns WIDs (device-suffixed / @lid). Degradamos sem derrubar o handler.
+      let contact: any = null;
+      try {
+        contact = await client.getContactById(contactId);
+      } catch (err) {
+        logger.warn(`[${sessionId}] Falha ao obter contato ${contactId}: ${err}`);
+      }
+      const profilePicUrl = await fetchProfilePicIfNew(client, isGroup ? chat : (contact || chat));
 
       // Tratamento de IDs na mensagem enviada (message_create)
       const lid = msg.to.includes('@lid') ? msg.to : null;
@@ -549,11 +560,11 @@ class SessionManager {
         lid: lid,
         jid: jid,
         userId: msg.author || (client.info ? client.info.wid._serialized : null), // No caso de msg enviada por mim
-        userName: contact.pushname || contact.name || '',
+        userName: (contact && (contact.pushname || contact.name)) || '',
         isGroup: isGroup,
         groupName: isGroup ? chat.name : null,
         text: msg.body || '',
-        pushName: contact.pushname || contact.name || jid.split('@')[0],
+        pushName: (contact && (contact.pushname || contact.name)) || jid.split('@')[0],
         previewText,
         timestamp: msg.timestamp,
         mediaType: msg.type,
