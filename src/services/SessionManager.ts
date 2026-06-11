@@ -13,6 +13,7 @@ interface SessionData {
   status: SessionState;
   qrCode: string | null;
   healthTimer?: NodeJS.Timeout;
+  connectTimer?: NodeJS.Timeout;
 }
 
 // Padrões de erro que indicam que o Chromium/frame morreu — não há recuperação
@@ -335,6 +336,10 @@ class SessionManager {
 
     this.sessions.set(sessionId, { client, status: 'STARTING', qrCode: null });
 
+    // Watchdog: se a sessão não chegar a CONNECTED (nem ficar aguardando QR)
+    // dentro do prazo, o initialize() provavelmente travou — força um reboot.
+    this.startConnectWatchdog(sessionId);
+
     // ── QR Code ──────────────────────────────────────────────────────────────
     client.on('qr', (qr) => {
       logger.info(`[${sessionId}] QR Code gerado.`);
@@ -346,6 +351,7 @@ class SessionManager {
     // ── Pronto ───────────────────────────────────────────────────────────────
     client.on('ready', () => {
       logger.info(`[${sessionId}] Sessao conectada com sucesso!`);
+      this.markConnected(sessionId);
       const session = this.sessions.get(sessionId);
       if (session) { session.status = 'CONNECTED'; session.qrCode = null; }
 
@@ -371,6 +377,7 @@ class SessionManager {
     // ── Autenticado ─────────────────────────────────────────────────────────
     client.on('authenticated', () => {
       logger.info(`[${sessionId}] Autenticado.`);
+      this.markConnected(sessionId);
       const session = this.sessions.get(sessionId);
       if (session) {
         session.status = 'CONNECTED'; // Pode ser refinado se necessário
@@ -777,6 +784,48 @@ class SessionManager {
   }
 
   /**
+   * Marca a sessão como conectada com sucesso: limpa o flag de reboot (para
+   * reabilitar o auto-healing futuro) e cancela o watchdog de conexão.
+   *
+   * CRÍTICO: sem isto, após o primeiro reboot o sessionId fica preso em
+   * `this.rebooting` para sempre — todo rebootSession() seguinte é ignorado e
+   * o health check é pulado, deixando a sessão sem nenhuma recuperação.
+   */
+  private markConnected(sessionId: string) {
+    this.rebooting.delete(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (session?.connectTimer) {
+      clearTimeout(session.connectTimer);
+      session.connectTimer = undefined;
+    }
+  }
+
+  /**
+   * Watchdog de conexão: se a sessão não atingir CONNECTED (e não estiver
+   * legitimamente aguardando leitura de QR) dentro do prazo, o initialize()
+   * provavelmente travou silenciosamente — força um reboot limpo.
+   */
+  private startConnectWatchdog(sessionId: string, timeoutMs: number = 120000) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (session.connectTimer) clearTimeout(session.connectTimer);
+
+    session.connectTimer = setTimeout(() => {
+      const s = this.sessions.get(sessionId);
+      if (!s) return;
+      // Conectado: nada a fazer. Aguardando QR: é estado válido (usuário
+      // ainda não escaneou) — não reiniciamos para não invalidar o QR.
+      if (s.status === 'CONNECTED' || s.status === 'QR_READY') return;
+
+      logger.error(`[${sessionId}] Watchdog: sessão presa em ${s.status} por ${timeoutMs}ms — forçando reboot.`);
+      // Libera o flag para que o rebootSession() consiga de fato entrar
+      // (o reboot que originou este startSession ainda o mantém setado).
+      this.rebooting.delete(sessionId);
+      this.rebootSession(sessionId, `connect watchdog timeout (${s.status})`);
+    }, timeoutMs);
+  }
+
+  /**
    * Health check ativo: a cada 30s, faz uma operação leve no pupPage. Se
    * falhar (frame detached, contexto destruído, timeout), dispara reboot.
    * Cobre o cenário em que o frame trava sem emitir nenhum evento.
@@ -916,6 +965,10 @@ class SessionManager {
       if (session.healthTimer) {
         clearInterval(session.healthTimer);
         session.healthTimer = undefined;
+      }
+      if (session.connectTimer) {
+        clearTimeout(session.connectTimer);
+        session.connectTimer = undefined;
       }
     }
 
@@ -1306,6 +1359,12 @@ class SessionManager {
         clearInterval(session.healthTimer);
         session.healthTimer = undefined;
       }
+      if (session.connectTimer) {
+        clearTimeout(session.connectTimer);
+        session.connectTimer = undefined;
+      }
+      // Remove o flag de reboot para não bloquear um futuro re-start manual.
+      this.rebooting.delete(sessionId);
       try {
         await session.client.logout();
         await session.client.destroy();
