@@ -111,7 +111,7 @@ export class NotifyService {
    */
   static async notifyStatus(
     sessionId: string,
-    eventType: 'session.connected' | 'session.disconnected',
+    eventType: 'session.connected' | 'session.disconnected' | 'session.authenticated',
     data: Record<string, any>
   ) {
     const payload = {

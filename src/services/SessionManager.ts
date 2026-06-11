@@ -372,6 +372,12 @@ class SessionManager {
       if (session) {
         session.status = 'CONNECTED'; // Pode ser refinado se necessário
       }
+
+      // Notifica os apps que a sessão foi autenticada — permite liberar a UI
+      // assim que o login é validado, sem esperar o evento 'ready'.
+      import('./NotifyService').then(({ NotifyService }) => {
+        NotifyService.notifyStatus(sessionId, 'session.authenticated', { status: 'CONNECTED' });
+      });
     });
 
     client.on('auth_failure', (msg) => {
@@ -911,13 +917,48 @@ class SessionManager {
     }, 7000);
   }
 
+  /**
+   * Wrapper defensivo para chat.fetchMessages().
+   *
+   * fetchMessages dispara a paginação interna do WhatsApp Web (loadEarlierMsgs →
+   * PrivateChat.fetchMessages). Quando o WhatsApp faz rollout de uma versão nova
+   * que diverge do que o whatsapp-web.js injeta, esse path quebra com erros crus
+   * como "Cannot read properties of undefined (reading 'waitForChatLoading')" e
+   * pode até travar. Aqui aplicamos timeout + tradução do erro para não derrubar
+   * o fluxo do controller a cada rollout.
+   */
+  private async fetchMessagesSafe(
+    chat: any,
+    searchOptions: { limit?: number; fromMe?: boolean },
+    sessionId: string,
+    timeoutMs: number = 30000,
+  ): Promise<WWebMessage[]> {
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('fetchMessages timeout')), timeoutMs),
+    );
+    try {
+      return await Promise.race([chat.fetchMessages(searchOptions), timeout]);
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      const wm
+        = /waitForChatLoading|loadEarlierMsgs|getLastMsgKeyForAction|timeout/i.test(msg);
+      logger.error(
+        `[${sessionId}] fetchMessages falhou (chat ${chat?.id?._serialized}): ${msg}`
+        + (wm
+          ? ' — provável incompatibilidade whatsapp-web.js × versão do WhatsApp Web.'
+          : ''),
+      );
+      throw new Error(`Falha ao buscar mensagens: ${msg}`);
+    }
+  }
+
   async getMessages(sessionId: string, number: string, limit: number = 50) {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
 
     const jid = this.formatJid(number);
     const chat = await session.client.getChatById(jid);
-    const messages = await chat.fetchMessages({ limit });
+    const messages = await this.fetchMessagesSafe(chat, { limit }, sessionId);
 
 
     return await Promise.all(messages.map(async (msg) => {
@@ -980,7 +1021,7 @@ class SessionManager {
 
     const jid = this.formatJid(number);
     const chat = await session.client.getChatById(jid);
-    const messages = await chat.fetchMessages({ limit: 100 });
+    const messages = await this.fetchMessagesSafe(chat, { limit: 100 }, sessionId);
     const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
 
     if (!msg) throw new Error('Message not found');
@@ -993,7 +1034,7 @@ class SessionManager {
 
     const jid = this.formatJid(number);
     const chat = await session.client.getChatById(jid);
-    const messages = await chat.fetchMessages({ limit: 100 });
+    const messages = await this.fetchMessagesSafe(chat, { limit: 100 }, sessionId);
     const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
 
     if (!msg) throw new Error('Message not found');
@@ -1008,7 +1049,7 @@ class SessionManager {
     const toJid = this.formatJid(toNumber);
 
     const chat = await session.client.getChatById(fromJid);
-    const messages = await chat.fetchMessages({ limit: 100 });
+    const messages = await this.fetchMessagesSafe(chat, { limit: 100 }, sessionId);
     const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
 
     if (!msg) throw new Error(`Message ${messageId} not found in chat ${fromJid}`);
@@ -1022,7 +1063,7 @@ class SessionManager {
 
     const jid = this.formatJid(number);
     const chat = await session.client.getChatById(jid);
-    const messages = await chat.fetchMessages({ limit: 100 });
+    const messages = await this.fetchMessagesSafe(chat, { limit: 100 }, sessionId);
     const msg = messages.find(m => m.id.id === messageId || m.id._serialized === messageId);
 
     if (!msg) throw new Error('Message not found');
