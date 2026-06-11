@@ -823,28 +823,39 @@ class SessionManager {
 
   /**
    * Aquece o cache local de fotos de perfil logo após a sessão conectar.
-   * Processa os contatos em lotes para não sobrecarregar o WhatsApp.
-   * Após o warm-up, fetchProfilePic retorna instantaneamente do disco
-   * em vez de buscar no WhatsApp a cada mensagem recebida/enviada.
+   *
+   * Gatilho deliberadamente ENXUTO: em vez de varrer a agenda inteira
+   * (getContacts → milhares de downloads a cada reconexão/auto-healing),
+   * pré-carrega apenas os contatos das CONVERSAS MAIS RECENTES — os que de
+   * fato aparecem na UI. Todo o resto é baixado sob demanda pelo
+   * fetchProfilePicIfNew quando chega/sai uma mensagem.
    */
   private async warmProfilePicCache(sessionId: string, client: Client): Promise<void> {
+    // Quantos chats recentes pré-aquecer. O restante fica sob demanda.
+    const RECENT_CHATS_LIMIT = 30;
+
     logger.info(`[${sessionId}] Iniciando warm-up do cache de fotos de perfil...`);
     try {
-      const contacts = await client.getContacts();
+      const chats = await client.getChats();
 
-      const eligible = contacts.filter(c => {
-        const jid = c.id._serialized;
-        return (
-          !jid.includes('@g.us') &&
-          !jid.includes('@newsletter') &&
-          !jid.includes('@broadcast') &&
-          !jid.includes('@lid')
-        );
-      });
+      // Conversas individuais, mais recentes primeiro, limitadas ao teto.
+      const recent = chats
+        .filter(chat => {
+          const jid = chat.id?._serialized || '';
+          return (
+            !chat.isGroup &&
+            !jid.includes('@g.us') &&
+            !jid.includes('@newsletter') &&
+            !jid.includes('@broadcast') &&
+            !jid.includes('@lid')
+          );
+        })
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        .slice(0, RECENT_CHATS_LIMIT);
 
       // Só baixa quem ainda não tem cache válido (< 24h)
-      const stale = eligible.filter(c => !hasValidProfilePicCache(c.id._serialized));
-      logger.info(`[${sessionId}] Warm-up: ${stale.length}/${eligible.length} contatos sem cache válido.`);
+      const stale = recent.filter(c => !hasValidProfilePicCache(c.id._serialized));
+      logger.info(`[${sessionId}] Warm-up: ${stale.length}/${recent.length} chats recentes sem cache válido.`);
 
       if (stale.length === 0) return;
 
