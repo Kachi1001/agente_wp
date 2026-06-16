@@ -1,6 +1,11 @@
 import pino from 'pino';
 import path from 'path';
 import fs from 'fs';
+import { appendSessionLog } from './sessionLog';
+
+// Quando definido, este processo é um sessionWorker (1 sessão). Os logs vão para
+// o arquivo DAQUELA sessão e são encaminhados ao pai (live + arquivo global).
+const WORKER_SESSION_ID = process.env.WW_SESSION_ID || '';
 
 // Logger de console (pretty) — mantém o comportamento já usado em todo o app.
 const consoleLogger = pino({
@@ -57,11 +62,33 @@ function toRecord(args: any[]): { event: string; meta: Record<string, unknown> }
 function writeFile(level: LogLevel, args: any[]) {
   try {
     const { event, meta } = toRecord(args);
-    const line = JSON.stringify({ ts: new Date().toISOString(), level, event, ...meta }) + '\n';
+    const ts = new Date().toISOString();
+
+    if (WORKER_SESSION_ID) {
+      // Dentro de um worker: grava no arquivo da SESSÃO e encaminha ao pai, que
+      // escreve no log global e faz o broadcast ao vivo para o painel /admin.
+      appendSessionLog(WORKER_SESSION_ID, { ts, level, event, meta: meta as Record<string, unknown> });
+      try { process.send?.({ kind: 'log', level, event, meta, ts }); } catch { /* canal fechado */ }
+      return;
+    }
+
+    const line = JSON.stringify({ ts, level, event, ...meta }) + '\n';
     fs.appendFileSync(fileForDate(), line, 'utf8');
   } catch (e) {
     consoleLogger.error(e, '[logger] falha ao escrever no arquivo de log');
   }
+}
+
+/**
+ * Acrescenta uma linha ao log GLOBAL sem imprimir no console. Usado pelo
+ * Supervisor para repassar logs vindos dos workers (que já imprimiram no próprio
+ * stdout herdado) ao arquivo único consumido pela Central, sem dupla impressão.
+ */
+export function appendMainLog(level: LogLevel, event: string, meta?: Record<string, unknown>, ts?: string) {
+  try {
+    const line = JSON.stringify({ ts: ts || new Date().toISOString(), level, event, ...(meta || {}) }) + '\n';
+    fs.appendFileSync(fileForDate(), line, 'utf8');
+  } catch { /* logging nunca quebra o fluxo */ }
 }
 
 export const logger = {

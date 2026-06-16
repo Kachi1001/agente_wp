@@ -6,9 +6,21 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { config } from '../config';
+import { getApiVersion } from '../docs/openapi';
+
+interface ConnectedClient {
+  socketId: string;
+  sessionId: string | null;
+  connectedAt: string;
+  address: string | null;
+  userAgent: string | null;
+}
 
 class SocketService {
   private io: SocketIOServer | null = null;
+  // Clientes (apps consumidores) atualmente conectados — alimenta o menu
+  // "apps conectados" do painel /admin.
+  private clients: Map<string, ConnectedClient> = new Map();
 
   init(httpServer: HttpServer) {
     this.io = new SocketIOServer(httpServer, {
@@ -38,6 +50,20 @@ class SocketService {
     this.io.on('connection', (socket) => {
       const sessionId = socket.handshake.query.sessionId as string;
       logger.info(`[Socket.IO] New client connected: ${socket.id}${sessionId ? ` (Session: ${sessionId})` : ''}`);
+
+      // Registra o cliente para o menu "apps conectados" do painel.
+      this.clients.set(socket.id, {
+        socketId: socket.id,
+        sessionId: sessionId || (socket.handshake.query.admin ? '(admin)' : null),
+        connectedAt: new Date().toISOString(),
+        address: socket.handshake.address || null,
+        userAgent: (socket.handshake.headers['user-agent'] as string) || null,
+      });
+      this.broadcastClients();
+
+      // Informa o hash atual de capacidades da API ao cliente recém-conectado.
+      // Se ele tiver um hash diferente do guardado, rebusca /api/docs/openapi.json.
+      socket.emit('capabilities.updated', getApiVersion());
 
       // ── VERIFICAR SESSÃO AO CONECTAR ──
       if (sessionId) {
@@ -75,6 +101,8 @@ class SocketService {
         try {
           const { sessionId } = data;
           socket.join(sessionId); // Entra na "sala" da sessão informada
+          const c = this.clients.get(socket.id);
+          if (c) { c.sessionId = sessionId; this.broadcastClients(); }
           const status = sessionManager.getSessionStatus(sessionId);
           logger.info(`[Socket.IO] Client ${socket.id} joined session ${sessionId}. Status: ${status.status}`);
 
@@ -102,10 +130,39 @@ class SocketService {
 
       socket.on('disconnect', () => {
         logger.info(`[Socket.IO] Client disconnected: ${socket.id}`);
+        this.clients.delete(socket.id);
+        this.broadcastClients();
       });
     });
 
     logger.info('[Socket.IO] Initialized');
+  }
+
+  /**
+   * Broadcast dedicado do snapshot de sessões para o painel /admin.
+   * Vai para todos os clientes conectados no evento 'admin:sessions' SEM o mirror
+   * de 'events' (não polui os listeners de mensagens das sessões).
+   */
+  broadcastAdmin(snapshot: any) {
+    if (!this.io) return;
+    this.io.emit('admin:sessions', snapshot);
+  }
+
+  /** Stream ao vivo de log por sessão para o painel /admin (terminal por sessão). */
+  broadcastAdminLog(sessionId: string, line: { ts: string; level: string; event: string; meta?: any }) {
+    if (!this.io) return;
+    this.io.emit('admin:log', { sessionId, ...line });
+  }
+
+  /** Clientes (apps consumidores) atualmente conectados — para o painel. */
+  getConnectedClients(): ConnectedClient[] {
+    return Array.from(this.clients.values());
+  }
+
+  /** Push do menu "apps conectados" sempre que a lista muda. */
+  private broadcastClients() {
+    if (!this.io) return;
+    this.io.emit('admin:clients', { ts: new Date().toISOString(), clients: this.getConnectedClients() });
   }
 
   emit(event: string, payload: any) {

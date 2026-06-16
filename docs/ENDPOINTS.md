@@ -1,5 +1,14 @@
 # Manual de Endpoints - Agente WP
 
+> ⚡ **Fonte viva (auto-atualizável):** A documentação canônica agora é gerada
+> automaticamente a partir das rotas reais do servidor:
+> - Swagger UI: **`GET /api/docs`**
+> - OpenAPI 3.0: **`GET /api/docs/openapi.json`**
+> - Versão/mudanças: **`GET /api/docs/version`**
+>
+> Veja [AUTO_DOCS.md](AUTO_DOCS.md) para integrar outro projeto. Este arquivo é
+> apenas um resumo legível e pode ficar desatualizado — confie no OpenAPI.
+
 Este documento descreve os endpoints disponíveis na API do **Agente WP**, um serviço de integração com WhatsApp.
 
 ## Base URL
