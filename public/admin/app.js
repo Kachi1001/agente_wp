@@ -257,7 +257,6 @@
   function setUserUI() {
     const name = USER ? (USER.name || USER.username || USER.email || 'usuário') : '';
     $('userLabel').textContent = USER ? ('👤 ' + name) : '';
-    $('logoutBtn').style.display = TOKEN ? '' : 'none';
   }
   async function loadMe() {
     try {
@@ -266,10 +265,11 @@
       setUserUI();
     } catch { /* 401 já redireciona via api() */ }
   }
-  function logout() {
-    clearToken();
-    if (socketRef) { try { socketRef.disconnect(); } catch {} socketRef = null; }
-    gotoLogin('no_token');
+  // Abre o portal da Central em nova aba (URL vem do /admin/api/config).
+  function openCentral() {
+    const base = CONFIG.centralUrl || '';
+    if (!base) return toast('URL da Central indisponível.', true);
+    window.open(base, '_blank', 'noopener');
   }
 
   // ── Socket.IO (live) + polling fallback ─────────────────────────────────────
@@ -290,7 +290,7 @@
     $('createBtn').onclick = createSession;
     $('newId').addEventListener('keydown', (e) => { if (e.key === 'Enter') createSession(); });
     $('refreshBtn').onclick = loadSessions;
-    $('logoutBtn').onclick = logout;
+    $('centralBtn').onclick = openCentral;
     $('qrClose').onclick = closeQr;
     $('sessClose').onclick = closeSessTerminal;
     $('sessLevel').onchange = loadSessionTerminal;

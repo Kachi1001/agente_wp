@@ -17,12 +17,13 @@
       font-size: 14px;
     }
     header {
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex; align-items: center; gap: 12px;
       padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
       position: sticky; top: 0; z-index: 10;
     }
-    header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-    header .right { display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 16px; margin: 0; font-weight: 600; flex: 0 0 auto; text-align: center; }
+    header .left { flex: 1 1 0; display: flex; align-items: center; }
+    header .right { flex: 1 1 0; display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
     .dot.on { background: var(--green); } .dot.off { background: var(--red); }
     main { padding: 20px; max-width: 1100px; margin: 0 auto; }
@@ -72,13 +73,15 @@
 </head>
 <body>
   <header>
+    <div class="left">
+      <button class="small" id="centralBtn" title="Abrir a Central Tecnika">🏠 Central</button>
+    </div>
     <h1>🟢 Agente WP — Painel de Sessões</h1>
     <div class="right">
       <span class="muted" id="modeLabel"></span>
       <span class="dot off" id="liveDot" title="Socket"></span>
       <span class="muted" id="liveLabel">offline</span>
       <span class="muted" id="userLabel"></span>
-      <button class="small" id="logoutBtn" style="display:none;" title="Encerrar sessão">⎋ Sair</button>
     </div>
   </header>
 
