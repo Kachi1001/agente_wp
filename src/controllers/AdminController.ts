@@ -1,10 +1,9 @@
 import { Request, Response } from 'express';
-import axios from 'axios';
 import { sessionManager } from '../services/SessionManager';
 import { socketService } from '../services/SocketService';
 import { readLogs } from '../utils/logger';
 import { readSessionLogs } from '../utils/sessionLog';
-import { adminBypassEnabled, CENTRAL_URL } from '../middleware/adminAuth';
+import { ADMIN_CENTRAL_URL, ADMIN_APP_ID } from '../middleware/adminAuth';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // API do painel /admin. Apenas dados de operação — as ações (start/restart/stop/
@@ -34,36 +33,19 @@ export const adminController = {
   },
 
   // GET /admin/api/config — bootstrap do painel (aberto, sem segredos).
+  // Informa a Central e o app_id para o front montar o redirect de login.
   config(_req: Request, res: Response): void {
     res.status(200).json({
       authEnabled: process.env.AUTH_ENABLED === 'true',
-      sso: true,                          // /admin valida o usuário via SSO da Central
-      bypassEnabled: adminBypassEnabled(),// ADMIN_TOKEN disponível (dev/M2M)
+      sso: true,
+      centralUrl: ADMIN_CENTRAL_URL,
+      appId: ADMIN_APP_ID,
       workerMode: process.env.WORKER_MODE !== '0',
     });
   },
 
-  // POST /admin/api/login — proxy do login SSO da Central (evita CORS no painel).
-  // Recebe { username, password } e devolve { token, user } da Central.
-  async login(req: Request, res: Response): Promise<void> {
-    const { username, password } = req.body || {};
-    if (!username || !password) {
-      res.status(400).json({ error: 'username e password são obrigatórios' });
-      return;
-    }
-    try {
-      const { data } = await axios.post(
-        `${CENTRAL_URL}/api/auth/login`,
-        { username, password },
-        { timeout: 8000 },
-      );
-      res.status(200).json({ token: data.token, user: data.user });
-    } catch (err: any) {
-      if (err.response) {
-        res.status(err.response.status).json({ error: err.response.data?.error || 'Credenciais inválidas' });
-        return;
-      }
-      res.status(503).json({ error: 'Serviço de autenticação indisponível' });
-    }
+  // GET /admin/api/me — usuário autenticado (preenchido pelo adminAuth via SSO).
+  me(req: Request, res: Response): void {
+    res.status(200).json({ user: (req as any).user ?? null });
   },
 };

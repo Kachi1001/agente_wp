@@ -37,10 +37,9 @@ Processo pai (PM2)
 | Var | Padrão | Efeito |
 |---|---|---|
 | `WORKER_MODE` | `1` (ligado) | `0` → volta ao monólito in-process (rollback sem redeploy). |
-| `CENTRAL_URL` | `http://10.0.0.139:4000` | Central SSO usada para validar o login/JWT do painel. |
-| `ADMIN_REQUIRED_ROLE` | `admin` | Papel exigido no `/admin`. Vazio = qualquer usuário autenticado. |
-| `ADMIN_TOKEN` | _(vazio)_ | Bypass M2M/dev opcional (`x-admin-token`). Definido = aceita esse token além do SSO. Vazio = só SSO. |
-| `AUTH_ENABLED` | _(vazio)_ | Inalterado. Quando `true`, as ações `/session/*` exigem JWT — o painel usa o mesmo JWT do SSO. |
+| `CENTRAL_AUTH_URL` | `http://10.0.0.139:4000` | Central SSO — usada no redirect de login e na validação (`/auth/verify`). |
+| `APP_ID` | _(vazio)_ | Identificador deste app na Central (ex.: `agente_wp`). Usado no redirect e na checagem de acesso (`apps`). **Defina.** |
+| `AUTH_ENABLED` | _(vazio)_ | Inalterado. Quando `true`, as ações `/session/*` exigem JWT — o painel reusa o token SSO. |
 
 ## Painel /admin
 
@@ -74,15 +73,20 @@ nele os logs recebidos dos workers, sem dupla impressão no console do PM2.
 Endpoints: `GET /admin/api/logs?session=<id>` (histórico da sessão) · `GET /admin/api/clients`
 (apps conectados). Ambos exigem login SSO (papel `admin`).
 
-### Login (SSO da Central)
-O painel valida o usuário pela Central:
-- Ao abrir, pede **usuário e senha** → o backend faz proxy de `POST /admin/api/login`
-  para `POST {CENTRAL_URL}/api/auth/login` (sem CORS) e devolve o `{ token, user }`.
-- O JWT fica em `sessionStorage` e vai como `Authorization: Bearer` em **todas** as
-  chamadas — `/admin/api/*` (validado contra `{CENTRAL_URL}/api/v1/auth/verify`, exige
-  papel `admin`) e as ações `/session/*`.
-- Cada requisição com token inválido/expirado (401) reabre o login automaticamente.
-- `ADMIN_TOKEN`, se definido, continua aceito como bypass M2M via `x-admin-token`.
+### Login (SSO da Central — fluxo de redirect)
+Segue o runbook oficial da Tecnika — **sem página de login local**:
+1. Navegar para `/admin` sem sessão → o backend (`adminAuth`) redireciona o browser
+   para `{CENTRAL_AUTH_URL}/login?redirect=<url>&app_id=<APP_ID>&error=no_token`.
+2. A Central autentica (aproveitando a sessão/cookie existente) e devolve para
+   `/admin?sso_token=<jwt>`.
+3. O `adminAuth` captura o `sso_token`, grava no **cookie `sso_token`** (8h), limpa a
+   URL e valida o token em `{CENTRAL_AUTH_URL}/auth/verify` (checando acesso ao app
+   via `apps`/`allowedApps`).
+4. O painel lê o cookie e envia `Authorization: Bearer` em tudo — `/admin/api/*` e as
+   ações `/session/*`. Em **401** limpa o cookie e volta ao SSO; **403** → tela de
+   "sem permissão".
+- Bypass M2M: enviar o `webhookSecret` como `Bearer` (consistente com o `authMiddleware`).
+- `GET /admin/api/me` devolve o usuário autenticado (nome no cabeçalho + botão Sair).
 
 ## Robustez (relocada e reforçada)
 

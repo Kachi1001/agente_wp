@@ -19,15 +19,19 @@ function sendPanel(res: import('express').Response, file: string) {
   });
 }
 
-// ── Painel estático (HTML/JS) — aberto; os DADOS é que são protegidos ──────────
-router.get('/', (_req, res) => sendPanel(res, 'index.html'));
+// ── Shell do painel: PROTEGIDO. Navegação sem token → redirect para o SSO da
+//    Central; retorno com ?sso_token=... é capturado pelo adminAuth (cookie + URL
+//    limpa) antes de servir o HTML. ───────────────────────────────────────────
+router.get('/', adminAuth, (_req, res) => sendPanel(res, 'index.html'));
+
+// JS estático: aberto (sem segredos; o cookie já está setado quando carrega).
 router.get('/app.js', (_req, res) => sendPanel(res, 'app.js'));
 
-// ── Bootstrap + login SSO: abertos (o login proxia para a Central) ─────────────
+// Bootstrap aberto: Central + app_id para o front montar o redirect de login.
 router.get('/api/config', adminController.config);
-router.post('/api/login', adminController.login);
 
-// ── Dados protegidos por ADMIN_TOKEN ───────────────────────────────────────────
+// ── Dados + identidade: validados via SSO ──────────────────────────────────────
+router.get('/api/me', adminAuth, adminController.me);
 router.get('/api/sessions', adminAuth, adminController.sessions);
 router.get('/api/logs', adminAuth, adminController.logs);
 router.get('/api/clients', adminAuth, adminController.clients);

@@ -3,23 +3,38 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  let JWT = sessionStorage.getItem('wp_jwt') || '';
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  // Token entregue pela Central via cookie sso_token (setado pelo backend no
+  // retorno do SSO). NÃO há login local — quem autentica é a Central.
+  let TOKEN = getCookie('sso_token') || '';
   let USER = null;
-  try { USER = JSON.parse(sessionStorage.getItem('wp_user') || 'null'); } catch {}
-  let CONFIG = { authEnabled: false, sso: true, bypassEnabled: false, workerMode: true };
+  let CONFIG = { authEnabled: false, sso: true, centralUrl: '', appId: '', workerMode: true };
   let logsAuto = true;
 
+  function gotoLogin(errorCode) {
+    const here = encodeURIComponent(window.location.href);
+    const base = CONFIG.centralUrl || '';
+    window.location.href = base + '/login?redirect=' + here +
+      '&app_id=' + encodeURIComponent(CONFIG.appId || '') +
+      '&error=' + (errorCode || 'no_token');
+  }
+  function clearToken() { TOKEN = ''; document.cookie = 'sso_token=; Max-Age=0; path=/'; }
+
   // ── HTTP helpers ────────────────────────────────────────────────────────────
-  // O JWT do SSO autentica TANTO /admin/api/* (validado pela Central) QUANTO as
-  // ações /session/* (authMiddleware também valida o mesmo JWT).
+  // O mesmo token SSO autentica /admin/api/* E as ações /session/* (o
+  // authMiddleware valida o mesmo Bearer).
   function authHeaders() {
-    return JWT ? { 'Authorization': 'Bearer ' + JWT } : {};
+    return TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
   }
   async function api(method, url, body) {
     const opts = { method, headers: { ...authHeaders() } };
     if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
     const res = await fetch(url, opts);
-    if (res.status === 401) { showLogin('Sessão expirada. Entre novamente.'); }
+    if (res.status === 401) { clearToken(); gotoLogin('session_expired'); }
+    if (res.status === 403) { gotoLogin('forbidden'); }
     if (!res.ok) {
       let detail = res.statusText;
       try { const j = await res.json(); detail = j.error || j.message || detail; } catch {}
@@ -238,53 +253,31 @@
     }
   }
 
-  // ── Login SSO ─────────────────────────────────────────────────────────────
-  let loginShown = false;
+  // ── Identidade (SSO) ──────────────────────────────────────────────────────
   function setUserUI() {
     const name = USER ? (USER.name || USER.username || USER.email || 'usuário') : '';
     $('userLabel').textContent = USER ? ('👤 ' + name) : '';
-    $('logoutBtn').style.display = JWT ? '' : 'none';
+    $('logoutBtn').style.display = TOKEN ? '' : 'none';
   }
-  function showLogin(msg) {
-    if (loginShown) { if (msg) $('loginErr').textContent = msg; return; }
-    loginShown = true;
-    $('loginErr').textContent = msg || '';
-    $('loginModal').classList.add('show');
-    setTimeout(() => $('loginUser').focus(), 50);
-  }
-  function hideLogin() { loginShown = false; $('loginModal').classList.remove('show'); }
-  async function doLogin() {
-    const username = $('loginUser').value.trim();
-    const password = $('loginPass').value;
-    if (!username || !password) { $('loginErr').textContent = 'Informe usuário e senha.'; return; }
-    $('loginBtn').disabled = true; $('loginErr').textContent = 'Validando…';
+  async function loadMe() {
     try {
-      const data = await api('POST', '/admin/api/login', { username, password });
-      JWT = data.token; USER = data.user || null;
-      sessionStorage.setItem('wp_jwt', JWT);
-      sessionStorage.setItem('wp_user', JSON.stringify(USER));
-      hideLogin(); setUserUI();
-      $('loginPass').value = '';
-      // (re)inicia tudo agora que há sessão
-      connectSocket(); loadSessions(); loadClients(); loadLogs();
-    } catch (e) {
-      $('loginErr').textContent = String(e.message).replace(/\(\d+\)$/, '').trim() || 'Falha no login.';
-    } finally { $('loginBtn').disabled = false; }
+      const data = await api('GET', '/admin/api/me');
+      USER = data.user || null;
+      setUserUI();
+    } catch { /* 401 já redireciona via api() */ }
   }
   function logout() {
-    JWT = ''; USER = null;
-    sessionStorage.removeItem('wp_jwt'); sessionStorage.removeItem('wp_user');
-    setUserUI();
+    clearToken();
     if (socketRef) { try { socketRef.disconnect(); } catch {} socketRef = null; }
-    showLogin('Você saiu.');
+    gotoLogin('no_token');
   }
 
   // ── Socket.IO (live) + polling fallback ─────────────────────────────────────
   let socketRef = null;
   function connectSocket() {
-    if (typeof io === 'undefined' || !JWT) return;
+    if (typeof io === 'undefined' || !TOKEN) return;
     if (socketRef) { try { socketRef.disconnect(); } catch {} }
-    socketRef = io('/', { query: { admin: '1' }, auth: { token: JWT } });
+    socketRef = io('/', { query: { admin: '1' }, auth: { token: TOKEN } });
     socketRef.on('connect', () => { $('liveDot').className = 'dot on'; $('liveLabel').textContent = 'ao vivo'; });
     socketRef.on('disconnect', () => { $('liveDot').className = 'dot off'; $('liveLabel').textContent = 'offline'; });
     socketRef.on('admin:sessions', (snap) => { if (snap && snap.sessions) renderRows(snap.sessions); });
@@ -298,8 +291,6 @@
     $('newId').addEventListener('keydown', (e) => { if (e.key === 'Enter') createSession(); });
     $('refreshBtn').onclick = loadSessions;
     $('logoutBtn').onclick = logout;
-    $('loginBtn').onclick = doLogin;
-    $('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
     $('qrClose').onclick = closeQr;
     $('sessClose').onclick = closeSessTerminal;
     $('sessLevel').onchange = loadSessionTerminal;
@@ -319,17 +310,17 @@
   async function init() {
     bindEvents();
     await loadConfig();
+    // O shell /admin é protegido no backend: se chegou aqui, normalmente já há
+    // cookie sso_token. Sem token (ex.: cookie expirado), volta para o SSO.
+    if (!TOKEN) { gotoLogin('no_token'); return; }
     setUserUI();
-    if (!JWT) {
-      showLogin();                                   // exige login SSO antes de tudo
-    } else {
-      connectSocket();
-      loadSessions(); loadClients(); loadLogs();
-    }
-    // Polls só agem quando há JWT (as chamadas anexam o Bearer; 401 reabre login).
-    setInterval(() => { if (JWT) loadSessions(); }, 4000);
-    setInterval(() => { if (JWT) loadClients(); }, 6000);
-    setInterval(() => { if (JWT && logsAuto) loadLogs(); }, 5000);
+    loadMe();
+    connectSocket();
+    loadSessions(); loadClients(); loadLogs();
+    // 401 em qualquer poll reabre o login automaticamente (tratado em api()).
+    setInterval(() => { if (TOKEN) loadSessions(); }, 4000);
+    setInterval(() => { if (TOKEN) loadClients(); }, 6000);
+    setInterval(() => { if (TOKEN && logsAuto) loadLogs(); }, 5000);
   }
 
   init();
