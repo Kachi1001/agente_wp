@@ -33,6 +33,9 @@ Thumbs.db
 
 /public/*
 !/public/default_avatar.svg
+# Painel /admin é código-fonte (UI versionável) — precisa ir pro deploy.
+!/public/admin/
+!/public/admin/**
 
 # --- AI Reviewer Local ---
 AI_CHANGELOG.md

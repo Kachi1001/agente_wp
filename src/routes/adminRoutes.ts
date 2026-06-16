@@ -6,9 +6,22 @@ import { adminAuth } from '../middleware/adminAuth';
 const router = Router();
 const PANEL_DIR = path.join(process.cwd(), 'public', 'admin');
 
+// Serve um arquivo do painel com erro CLARO se ele não foi para o deploy
+// (em vez de um ENOENT cru estourando como erro não tratado).
+function sendPanel(res: import('express').Response, file: string) {
+  res.sendFile(path.join(PANEL_DIR, file), (err) => {
+    if (err && !res.headersSent) {
+      res.status(500).type('text/plain').send(
+        `Painel /admin indisponível: "${file}" não encontrado em ${PANEL_DIR}.\n` +
+        `Garanta que public/admin/ foi para o deploy (não pode estar no .gitignore).`,
+      );
+    }
+  });
+}
+
 // ── Painel estático (HTML/JS) — aberto; os DADOS é que são protegidos ──────────
-router.get('/', (_req, res) => res.sendFile(path.join(PANEL_DIR, 'index.html')));
-router.get('/app.js', (_req, res) => res.sendFile(path.join(PANEL_DIR, 'app.js')));
+router.get('/', (_req, res) => sendPanel(res, 'index.html'));
+router.get('/app.js', (_req, res) => sendPanel(res, 'app.js'));
 
 // ── Bootstrap + login SSO: abertos (o login proxia para a Central) ─────────────
 router.get('/api/config', adminController.config);
