@@ -6,6 +6,7 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.post('/send', upload.single('file'), messageController.send);
+router.post('/send-location', messageController.sendLocation);
 router.post('/edit', messageController.edit);
 router.post('/delete', messageController.delete);
 router.post('/react', messageController.react);

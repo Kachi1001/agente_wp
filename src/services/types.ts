@@ -23,6 +23,13 @@ export interface SendMessageResult {
   to: string;
   text: string;
   timestamp: number;
+  /**
+   * true quando o envio sofreu dead-frame DEPOIS do dispatch e o resultado foi
+   * reconciliado via evento message_create (a mensagem realmente saiu). A sessão
+   * é respawnada em seguida, mas o serializedId é real — a plataforma correlaciona
+   * normalmente e não marca como "fora da plataforma".
+   */
+  recovered?: boolean;
 }
 
 /** Linha enriquecida exibida no painel /admin. */
@@ -75,6 +82,13 @@ export interface ISessionManager {
     mediaBuffer?: Buffer,
     mediaMime?: string,
     quotedMessageId?: string,
+  ): Promise<SendMessageResult>;
+  sendLocation(
+    sessionId: string,
+    to: string,
+    latitude: number,
+    longitude: number,
+    options?: { name?: string; address?: string; url?: string },
   ): Promise<SendMessageResult>;
   getMessages(sessionId: string, number: string, limit?: number): Promise<any[]>;
   editMessage(sessionId: string, number: string, messageId: string, newText: string): Promise<any>;

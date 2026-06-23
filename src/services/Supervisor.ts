@@ -59,6 +59,7 @@ interface SessionRecord {
 // (protocolTimeout do puppeteer é 600s).
 const RPC_TIMEOUT_MS: Record<RpcMethod, number> = {
   sendMessage: 60000,
+  sendLocation: 60000,
   getMessages: 90000,
   editMessage: 45000,
   deleteMessage: 45000,
@@ -620,6 +621,13 @@ export class Supervisor implements ISessionManager {
     this.assertConnected(sessionId);
     const mediaBase64 = mediaBuffer ? mediaBuffer.toString('base64') : undefined;
     return this.callRpc(sessionId, 'sendMessage', [to, text, mediaType, mediaBase64, mediaMime, quotedMessageId]);
+  }
+  sendLocation(
+    sessionId: string, to: string, latitude: number, longitude: number,
+    options?: { name?: string; address?: string; url?: string },
+  ): Promise<SendMessageResult> {
+    this.assertConnected(sessionId);
+    return this.callRpc(sessionId, 'sendLocation', [to, latitude, longitude, options]);
   }
   getMessages(sessionId: string, number: string, limit?: number): Promise<any[]> {
     this.assertConnected(sessionId); return this.callRpc(sessionId, 'getMessages', [number, limit ?? 50]);

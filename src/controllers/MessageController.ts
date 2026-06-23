@@ -33,6 +33,35 @@ export const messageController = {
       res.status(500).json({ error: 'Failed to send message', details: error.message });
     }
   },
+  async sendLocation(req: Request, res: Response): Promise<void> {
+    const { sessionId, to, latitude, longitude, name, address, url } = req.body;
+
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+
+    if (!sessionId || !to || latitude === undefined || longitude === undefined) {
+      res.status(400).json({ error: 'Missing required parameters: sessionId, to, latitude, longitude' });
+      return;
+    }
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      res.status(400).json({ error: 'latitude and longitude must be valid numbers' });
+      return;
+    }
+
+    const status = sessionManager.getSessionStatus(sessionId);
+    if (!status.exists || status.status !== 'CONNECTED') {
+      res.status(400).json({ error: `Session ${sessionId} is not connected.` });
+      return;
+    }
+
+    try {
+      const resp = await sessionManager.sendLocation(sessionId, to, lat, lng, { name, address, url });
+      res.status(200).json({ success: true, message: resp });
+    } catch (error: any) {
+      logger.error(error, `Failed to send location from session ${sessionId}`);
+      res.status(500).json({ error: 'Failed to send location', details: error.message });
+    }
+  },
   async edit(req: Request, res: Response): Promise<void> {
     const { sessionId, to, messageId, newText } = req.body;
 

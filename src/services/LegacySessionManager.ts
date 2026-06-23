@@ -1,4 +1,4 @@
-import { Client, LocalAuth, MessageMedia, Message as WWebMessage } from 'whatsapp-web.js';
+import { Client, LocalAuth, MessageMedia, Location, Message as WWebMessage } from 'whatsapp-web.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../utils/logger';
@@ -812,6 +812,37 @@ class LegacySessionManager implements ISessionManager {
         throw new Error('Sessão em recuperação automática');
       }
 
+      throw err;
+    }
+  }
+
+  async sendLocation(
+    sessionId: string,
+    to: string,
+    latitude: number,
+    longitude: number,
+    options?: { name?: string; address?: string; url?: string },
+  ) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== 'CONNECTED') throw new Error('Session not connected');
+
+    const jid = this.formatJid(to);
+    const location = new Location(latitude, longitude, options || {});
+
+    try {
+      const resp = await session.client.sendMessage(jid, location);
+      return { id: resp.id.id, serializedId: resp.id._serialized, fromMe: resp.fromMe, to: resp.to, text: resp.body, timestamp: resp.timestamp };
+    } catch (err: any) {
+      if (err.message?.includes('No LID for user')) {
+        logger.warn(`[${sessionId}] No LID para ${jid}, tentando numero direto: ${to}@c.us`);
+        const resp = await session.client.sendMessage(`${to.replace(/@.*/, '')}@c.us`, location);
+        return { id: resp.id.id, serializedId: resp.id._serialized, fromMe: resp.fromMe, to: resp.to, text: resp.body, timestamp: resp.timestamp };
+      }
+      if (isDeadFrameError(err)) {
+        logger.error(`[${sessionId}] Frame morto detectado em sendLocation: ${err?.message}`);
+        this.rebootSession(sessionId, `sendLocation frame crash: ${err?.message}`);
+        throw new Error('Sessão em recuperação automática');
+      }
       throw err;
     }
   }

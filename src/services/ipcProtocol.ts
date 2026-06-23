@@ -27,6 +27,7 @@ export type WorkerEventType =
 /** Métodos assíncronos que viram request/response RPC dentro do filho. */
 export type RpcMethod =
   | 'sendMessage'
+  | 'sendLocation'
   | 'getMessages'
   | 'editMessage'
   | 'deleteMessage'

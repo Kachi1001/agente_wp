@@ -82,6 +82,23 @@ export const routeMetadata: Record<string, RouteMeta> = {
       },
     },
   },
+  'POST /message/send-location': {
+    summary: 'Enviar localização',
+    description: 'Envia uma mensagem de localização (pin no mapa) com coordenadas e rótulo opcional.',
+    body: {
+      type: 'object',
+      required: ['sessionId', 'to', 'latitude', 'longitude'],
+      properties: {
+        sessionId: { type: 'string', description: 'ID da sessão conectada.' },
+        to: { type: 'string', example: '5511999999999@c.us', description: 'JID do destinatário.' },
+        latitude: { type: 'number', example: -23.55052, description: 'Latitude em graus decimais.' },
+        longitude: { type: 'number', example: -46.633308, description: 'Longitude em graus decimais.' },
+        name: { type: 'string', description: 'Nome do local (opcional).' },
+        address: { type: 'string', description: 'Endereço do local (opcional).' },
+        url: { type: 'string', description: 'URL exibida na mensagem de localização (opcional).' },
+      },
+    },
+  },
   'POST /message/edit': {
     summary: 'Editar mensagem',
     body: {

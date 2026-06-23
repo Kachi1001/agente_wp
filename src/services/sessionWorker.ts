@@ -1,4 +1,4 @@
-import { Client, LocalAuth, MessageMedia, Message as WWebMessage } from 'whatsapp-web.js';
+import { Client, LocalAuth, MessageMedia, Location, Message as WWebMessage } from 'whatsapp-web.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import qrcode from 'qrcode-terminal';
@@ -154,6 +154,82 @@ function assertConnected(): void {
   if (!connected) throw new Error('Session not connected');
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Reconciliação de envios com dead-frame PÓS-dispatch.
+//
+// Cenário real (visto no log do rh-geral): client.sendMessage() ENTREGA a mensagem
+// — o evento message_create dispara e logamos "Mensagem ENVIADA" — mas o execution
+// context do Chromium morre ao serializar a resposta, então o await rejeita com erro
+// de frame morto. Antes isso virava HTTP 500 pro chamador: a plataforma, sem receber
+// o serializedId, marcava a mensagem como "fora da plataforma" e ainda podia gerar
+// duplicata em retry.
+//
+// Mantemos um buffer curto das mensagens fromMe recém-criadas. No dead-frame de um
+// envio, procuramos a mensagem correspondente: se ela existe, o envio REALMENTE
+// ocorreu e devolvemos sucesso com o serializedId real. A sessão ainda é respawnada
+// (o frame morto não opera mais), porém sem perder a mensagem.
+// ──────────────────────────────────────────────────────────────────────────────
+interface SentRecord {
+  serializedId: string;
+  id: string;
+  rawTo: string;       // msg.to cru (pode ser @lid)
+  jid: string;         // jid normalizado (@c.us quando resolvível)
+  lid: string | null;
+  body: string;
+  timestamp: number;
+  at: number;          // Date.now() do registro (para TTL)
+  consumed: boolean;
+}
+const recentSent: SentRecord[] = [];
+const RECENT_SENT_TTL_MS = 30000;
+const RECENT_SENT_MAX = 60;
+
+function recordSentMessage(rec: Omit<SentRecord, 'at' | 'consumed'>): void {
+  recentSent.push({ ...rec, at: Date.now(), consumed: false });
+  const cutoff = Date.now() - RECENT_SENT_TTL_MS;
+  while (recentSent.length > RECENT_SENT_MAX || (recentSent.length > 0 && recentSent[0].at < cutoff)) {
+    recentSent.shift();
+  }
+}
+
+function onlyDigits(s: string): string {
+  return (s || '').replace(/@.*$/, '').replace(/\D/g, '');
+}
+
+/**
+ * Procura no buffer a mensagem fromMe correspondente a um envio que sofreu
+ * dead-frame. Faz polling curto porque o message_create pode chegar alguns ms
+ * depois. Casa por destinatário (obrigatório — comparando jid/lid/rawTo) e, quando
+ * há texto, pelo corpo. Marca a entrada como consumida para não reconciliar 2x.
+ */
+async function findSentForRecovery(toJid: string, body: string): Promise<SentRecord | null> {
+  const wantNum = onlyDigits(toJid);
+  const wantBody = (body || '').trim();
+  for (let attempt = 0; attempt < 12; attempt++) {   // ~1.2s no pior caso
+    const cutoff = Date.now() - RECENT_SENT_TTL_MS;
+    for (let i = recentSent.length - 1; i >= 0; i--) {
+      const r = recentSent[i];
+      if (r.consumed || r.at < cutoff) continue;
+      const numOk = wantNum.length > 0 && (
+        onlyDigits(r.jid) === wantNum ||
+        onlyDigits(r.lid || '') === wantNum ||
+        onlyDigits(r.rawTo) === wantNum
+      );
+      if (!numOk) continue;
+      if (wantBody && (r.body || '').trim() !== wantBody) continue;
+      r.consumed = true;
+      return r;
+    }
+    await delay(100);
+  }
+  return null;
+}
+
+/** Agenda o respawn da sessão SEM atropelar a resposta RPC já devolvida. */
+function scheduleFatalRecovery(reason: string): void {
+  setImmediate(() => { void fatalExit(reason); });
+}
+
 /**
  * Wrapper defensivo para chat.fetchMessages() — timeout + tradução de erro.
  * Portado do monólito (incompatibilidades whatsapp-web.js × WhatsApp Web).
@@ -264,8 +340,62 @@ async function sendMessage(
       return { id: resp.id.id, serializedId: resp.id._serialized, fromMe: resp.fromMe, to: resp.to, text: resp.body, timestamp: resp.timestamp };
     }
     if (isDeadFrameError(err)) {
-      // Mantém a mensagem voltada ao usuário do monólito; isDeadFrame:true faz o
-      // dispatcher fatalExit() e o Supervisor respawnar.
+      // Preserva a causa real do Chromium no log (ex.: "Execution context was
+      // destroyed") — antes era engolida pelo wrapper, dificultando o diagnóstico.
+      log('error', `[${SESSION_ID}] sendMessage dead-frame: ${err?.message}`);
+      // Pode ter morrido DEPOIS do dispatch. Reconcilia com o message_create já
+      // recebido: se a mensagem saiu, devolve sucesso com o serializedId real
+      // (a plataforma correlaciona e NÃO marca "fora da plataforma"; sem duplicata).
+      const recovered = await findSentForRecovery(jid, typeof text === 'string' ? text : '');
+      if (recovered) {
+        scheduleFatalRecovery(`sendMessage dead frame (recuperado): ${err?.message}`);
+        log('warn', `[${SESSION_ID}] Dead-frame PÓS-envio reconciliado via message_create (${recovered.serializedId}). Respawn agendado.`);
+        return {
+          id: recovered.id, serializedId: recovered.serializedId, fromMe: true,
+          to: recovered.jid, text: recovered.body, timestamp: recovered.timestamp, recovered: true,
+        };
+      }
+      // Sem correspondência → falha real; isDeadFrame:true faz o dispatcher
+      // fatalExit() e o Supervisor respawnar (comportamento antigo).
+      const e: any = new Error('Sessão em recuperação automática');
+      e.isDeadFrame = true;
+      throw e;
+    }
+    throw err;
+  }
+}
+
+async function sendLocation(
+  to: string,
+  latitude: number,
+  longitude: number,
+  options?: { name?: string; address?: string; url?: string },
+) {
+  assertConnected();
+  const jid = formatJid(to);
+  const location = new Location(latitude, longitude, options || {});
+
+  try {
+    const resp = await client.sendMessage(jid, location);
+    return { id: resp.id.id, serializedId: resp.id._serialized, fromMe: resp.fromMe, to: resp.to, text: resp.body, timestamp: resp.timestamp };
+  } catch (err: any) {
+    if (err.message?.includes('No LID for user')) {
+      log('warn', `[${SESSION_ID}] No LID para ${jid}, tentando numero direto: ${to}@c.us`);
+      const resp = await client.sendMessage(`${to.replace(/@.*/, '')}@c.us`, location);
+      return { id: resp.id.id, serializedId: resp.id._serialized, fromMe: resp.fromMe, to: resp.to, text: resp.body, timestamp: resp.timestamp };
+    }
+    if (isDeadFrameError(err)) {
+      log('error', `[${SESSION_ID}] sendLocation dead-frame: ${err?.message}`);
+      // Location não tem corpo de texto → casa só pelo destinatário.
+      const recovered = await findSentForRecovery(jid, '');
+      if (recovered) {
+        scheduleFatalRecovery(`sendLocation dead frame (recuperado): ${err?.message}`);
+        log('warn', `[${SESSION_ID}] Dead-frame PÓS-envio (location) reconciliado via message_create (${recovered.serializedId}). Respawn agendado.`);
+        return {
+          id: recovered.id, serializedId: recovered.serializedId, fromMe: true,
+          to: recovered.jid, text: recovered.body, timestamp: recovered.timestamp, recovered: true,
+        };
+      }
       const e: any = new Error('Sessão em recuperação automática');
       e.isDeadFrame = true;
       throw e;
@@ -487,6 +617,7 @@ function getSessionInfo() {
 // ── Tabela de dispatch RPC ────────────────────────────────────────────────────
 const handlers: Record<RpcMethod, (...args: any[]) => Promise<any> | any> = {
   sendMessage,
+  sendLocation,
   getMessages,
   editMessage,
   deleteMessage,
@@ -627,6 +758,32 @@ async function boot(): Promise<void> {
     if (!msg.fromMe) return;
     if (msg.from.includes('newsletter') || msg.from.includes('status@broadcast')) return;
 
+    // ── Identidade do destino primeiro (chat/contato/jid normalizado) ──────────
+    const isGroup = msg.to.includes('@g.us');
+    const chat = await msg.getChat();
+    const contactId = isGroup ? (msg.author || msg.from) : msg.to;
+    let contact: any = null;
+    try { contact = await client.getContactById(contactId); }
+    catch (err) { log('warn', `[${SESSION_ID}] Falha ao obter contato ${contactId}: ${err}`); }
+
+    const lid = msg.to.includes('@lid') ? msg.to : null;
+    let jid = chat.id._serialized;
+    if (!isGroup && jid.includes('@lid') && contact && contact.id._serialized.includes('@c.us')) {
+      jid = contact.id._serialized;
+    }
+
+    // Registra ANTES dos awaits pesados (mídia/foto) para a reconciliação de
+    // dead-frame em sendMessage/sendLocation encontrar a mensagem a tempo.
+    recordSentMessage({
+      serializedId: msg.id._serialized,
+      id: msg.id.id,
+      rawTo: msg.to,
+      jid,
+      lid,
+      body: msg.body || '',
+      timestamp: msg.timestamp,
+    });
+
     const previewText = getPreviewText(msg);
     let mediaUrl = null, mediaMime = null;
     if (msg.hasMedia) {
@@ -641,19 +798,7 @@ async function boot(): Promise<void> {
       catch (err) { log('warn', `[${SESSION_ID}] Falha ao obter quoted: ${err}`); }
     }
 
-    const isGroup = msg.to.includes('@g.us');
-    const chat = await msg.getChat();
-    const contactId = isGroup ? (msg.author || msg.from) : msg.to;
-    let contact: any = null;
-    try { contact = await client.getContactById(contactId); }
-    catch (err) { log('warn', `[${SESSION_ID}] Falha ao obter contato ${contactId}: ${err}`); }
     const profilePicUrl = await fetchProfilePicIfNew(client, isGroup ? chat : (contact || chat));
-
-    const lid = msg.to.includes('@lid') ? msg.to : null;
-    let jid = chat.id._serialized;
-    if (!isGroup && jid.includes('@lid') && contact && contact.id._serialized.includes('@c.us')) {
-      jid = contact.id._serialized;
-    }
 
     log('info', `[${SESSION_ID}] Mensagem ENVIADA para lid ${lid} jid ${jid} | tipo: ${msg.type}`);
 
